@@ -36,10 +36,24 @@ class DocumentProcessor:
 
         # Initialize processing components
         self.content_extractor = ContentExtractor(self.config)
-        self.ai_analyzer = AIDocumentAnalyzer(self.config) if self.config.enable_gemini else None
+        
+        # Initialize AI analyzer if Gemini is enabled
+        if self.config.enable_gemini:
+            self.logger.info(f"Initializing AI analyzer (Gemini enabled, API key present: {bool(self.config.gemini_api_key)})")
+            self.logger.debug(f"Gemini configuration: model={self.config.gemini_model_name}, temperature={self.config.gemini_temperature}")
+            try:
+                self.ai_analyzer = AIDocumentAnalyzer(self.config)
+                self.logger.info("AI analyzer initialized successfully")
+            except Exception as e:
+                self.logger.error(f"Failed to initialize AI analyzer: {str(e)}")
+                self.ai_analyzer = None
+        else:
+            self.logger.warning("Gemini disabled - AI analyzer will not be initialized")
+            self.ai_analyzer = None
+            
         self.markdown_builder = MarkdownBuilder(self.config)
 
-        self.logger.info("DocumentProcessor initialized successfully")
+        self.logger.info(f"DocumentProcessor initialized successfully (AI analyzer: {self.ai_analyzer is not None})")
 
     def _validate_config(self) -> None:
         """Validate critical configuration parameters."""
@@ -96,9 +110,23 @@ class DocumentProcessor:
             extracted_content = self.content_extractor.extract(pdf_path)
 
             # Stage 2: AI analysis (conditional)
-            if self.ai_analyzer:
-                self.logger.debug("Performing AI analysis")
-                extracted_content = self.ai_analyzer.analyze(extracted_content)
+            self.logger.info(f"AI Analyzer status: {self.ai_analyzer is not None}, Gemini enabled: {self.config.enable_gemini}")
+            
+            if extracted_content.figures:
+                self.logger.info(f"Found {len(extracted_content.figures)} figures to potentially analyze")
+                
+                if self.ai_analyzer:
+                    self.logger.info("Starting AI analysis for figure summarization")
+                    try:
+                        extracted_content = self.ai_analyzer.analyze(extracted_content)
+                        self.logger.info("AI analysis completed successfully")
+                    except Exception as e:
+                        self.logger.error(f"AI analysis failed: {str(e)}")
+                        self.logger.warning("Continuing with processing despite AI analysis failure")
+                else:
+                    self.logger.warning("AI analyzer not available - figures will not be summarized")
+            else:
+                self.logger.info("No figures found in document - skipping AI analysis")
 
             # Stage 3: Output generation
             self.logger.debug("Building output structure")

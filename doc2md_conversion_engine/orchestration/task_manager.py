@@ -71,6 +71,7 @@ class TaskManager:
         self.batch_config = batch_config
         self.circuit_breaker = circuit_breaker
         self.processor_pool = processor_pool
+        self.processor = None  # Initialize processor attribute
         
         # Create retry handler from batch configuration
         self.retry_handler = RetryHandler(
@@ -208,8 +209,13 @@ class TaskManager:
                 # Always release processor back to pool
                 await self.processor_pool.release(processor)
         else:
-            # Create new processor for this task
-            processor = DocumentProcessor()
+            # Use injected processor if available, otherwise create new one
+            use_injected_processor = hasattr(self, 'processor') and self.processor is not None
+            processor = self.processor if use_injected_processor else DocumentProcessor()
+            
+            # Log processor configuration
+            self.logger.debug(f"Using {'injected' if use_injected_processor else 'new'} processor for async task")
+            
             try:
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(
@@ -221,8 +227,9 @@ class TaskManager:
                 )
                 return result
             finally:
-                # Cleanup processor
-                processor.shutdown()
+                # Only cleanup processor if we created it (not injected)
+                if not use_injected_processor:
+                    processor.shutdown()
     
     def process_task_sync(self, task: ProcessingTask) -> ProcessingTask:
         """
@@ -242,8 +249,13 @@ class TaskManager:
         
         task.started_at = time.time()
         
-        # Create processor once outside retry loop
-        processor = DocumentProcessor()
+        # Use injected processor if available, otherwise create new one
+        use_injected_processor = hasattr(self, 'processor') and self.processor is not None
+        processor = self.processor if use_injected_processor else DocumentProcessor()
+        
+        # Log processor configuration
+        self.logger.info(f"Using {'injected' if use_injected_processor else 'new'} processor for sync task")
+        
         try:
             # Attempt processing with retries
             for attempt in range(1, task.max_retries + 2):  # +1 for initial
@@ -286,7 +298,9 @@ class TaskManager:
             
             return task
         finally:
-            processor.shutdown()
+            # Only shutdown processor if we created it (not injected)
+            if not use_injected_processor:
+                processor.shutdown()
 
 
 
