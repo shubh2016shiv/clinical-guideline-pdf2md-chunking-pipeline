@@ -124,14 +124,28 @@ class AIDocumentAnalyzer:
         
         self.logger.info(f"Analyzing {len(extracted_content.figures)} figures with AI")
         
-        for figure in extracted_content.figures:
-            # Skip if no image available
+        for i, figure in enumerate(extracted_content.figures):
+            figure_id = figure.get("figure_id", f"unknown_{i}")
+            
+            # Log figure details
+            self.logger.info(f"Processing figure {i+1}/{len(extracted_content.figures)}: {figure_id}")
+            
+            # Check if image is valid
             if not figure.get("image"):
+                self.logger.warning(f"Figure {figure_id}: No image data available")
                 figure["summary"] = "Figure present; image unavailable for analysis."
                 figure["analysis_method"] = "unavailable"
                 continue
             
+            # Log image properties
+            img = figure["image"]
+            if hasattr(img, 'width') and hasattr(img, 'height'):
+                self.logger.info(f"Figure {figure_id}: Image is valid (size: {img.width}x{img.height}, mode: {getattr(img, 'mode', 'unknown')})")
+            else:
+                self.logger.warning(f"Figure {figure_id}: Image object may be invalid")
+            
             # Perform AI analysis
+            self.logger.info(f"Starting analysis for figure {figure_id}")
             analysis_result = self.analyze_figure(
                 image=figure["image"],
                 caption=figure.get("caption", "")
@@ -142,6 +156,9 @@ class AIDocumentAnalyzer:
             figure["analysis_method"] = analysis_result.analysis_method
             figure["confidence"] = analysis_result.confidence
             figure["extracted_elements"] = analysis_result.extracted_elements
+            
+            # Log analysis result
+            self.logger.info(f"Figure {figure_id}: Analysis completed with method: {analysis_result.analysis_method}, confidence: {analysis_result.confidence}")
             
             # Remove PIL image from result to save memory
             if "image" in figure:
@@ -174,7 +191,19 @@ class AIDocumentAnalyzer:
                 )
         
         # Fallback to OCR-based analysis
-        return self._analyze_with_ocr(image, caption)
+        try:
+            return self._analyze_with_ocr(image, caption)
+        except Exception as e:
+            self.logger.warning(f"OCR analysis failed: {str(e)}")
+            
+            # Return minimal fallback result if all methods fail
+            return FigureAnalysisResult(
+                summary="- Figure detected (analysis unavailable)",
+                analysis_method="unavailable",
+                confidence="low",
+                extracted_elements={"nodes": [], "edges": [], "labels": []},
+                error_message=f"Analysis failed: {str(e)}"
+            )
 
     def _analyze_with_gemini(
         self,
@@ -207,17 +236,30 @@ class AIDocumentAnalyzer:
             # Parse structured elements from response
             extracted_elements = self._parse_analysis_elements(summary_text)
             
+            # Determine confidence level
+            confidence = "high"
+            if "analysis unavailable" in summary_text.lower():
+                confidence = "low"
+            
             return FigureAnalysisResult(
                 summary=summary_text,
                 analysis_method="gemini",
-                confidence="high",
+                confidence=confidence,
                 extracted_elements=extracted_elements,
                 error_message=None
             )
             
         except Exception as e:
             self.logger.error(f"Gemini analysis error: {str(e)}")
-            raise ProcessingError(f"Gemini analysis failed: {str(e)}") from e
+            
+            # Instead of raising an exception, return a fallback result
+            return FigureAnalysisResult(
+                summary="- Figure detected (analysis unavailable)\n- Gemini API error occurred",
+                analysis_method="gemini_failed",
+                confidence="low",
+                extracted_elements={"nodes": [], "edges": [], "labels": []},
+                error_message=str(e)
+            )
 
     def _build_gemini_prompt(self, caption: str) -> str:
         """
@@ -269,10 +311,16 @@ class AIDocumentAnalyzer:
         """
         import time
         
+        # Log image details
+        self.logger.info(f"Calling Gemini API with image: size={image.width}x{image.height}, mode={image.mode}")
+        
         last_error = None
         
         for attempt in range(max_retries):
             try:
+                self.logger.info(f"Gemini API attempt {attempt + 1}/{max_retries}")
+                
+                # Make the API call
                 response = self._gemini_model.generate_content(
                     [prompt, image],
                     safety_settings={
@@ -283,12 +331,23 @@ class AIDocumentAnalyzer:
                     }
                 )
                 
+                # Log response details
+                self.logger.info(f"Gemini API response received: {type(response)}")
+                
+                # Check response attributes
+                if hasattr(response, 'candidates'):
+                    candidates_count = len(response.candidates) if response.candidates else 0
+                    self.logger.info(f"Response has {candidates_count} candidates")
+                    
+                    if candidates_count > 0 and hasattr(response.candidates[0], 'finish_reason'):
+                        self.logger.info(f"Finish reason: {response.candidates[0].finish_reason}")
+                
                 # Check for blocked content
                 if hasattr(response, 'prompt_feedback'):
                     if response.prompt_feedback.block_reason:
-                        raise ProcessingError(
-                            f"Content blocked: {response.prompt_feedback.block_reason}"
-                        )
+                        error_msg = f"Content blocked: {response.prompt_feedback.block_reason}"
+                        self.logger.warning(error_msg)
+                        raise ProcessingError(error_msg)
                 
                 return response
                 
@@ -296,7 +355,7 @@ class AIDocumentAnalyzer:
                 last_error = e
                 if attempt < max_retries - 1:
                     wait_time = (2 ** attempt) * 1  # Exponential backoff: 1s, 2s, 4s
-                    self.logger.debug(
+                    self.logger.warning(
                         f"Gemini API attempt {attempt + 1} failed, "
                         f"retrying in {wait_time}s: {str(e)}"
                     )
@@ -322,23 +381,40 @@ class AIDocumentAnalyzer:
             ProcessingError: If response is invalid or empty
         """
         try:
-            # Extract text from response
-            text = getattr(response, "text", "")
+            # Check for finish reason (1 = STOP/success, 2+ = issues like MAX_TOKENS, SAFETY, etc.)
+            if hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'finish_reason'):
+                    finish_reason = candidate.finish_reason
+                    # finish_reason 1 = STOP (successful), 2+ = potential issues
+                    if finish_reason != 1 and finish_reason != 0:
+                        self.logger.warning(f"Non-successful finish_reason: {finish_reason}")
+                        return "- Figure detected (analysis unavailable)\n- Gemini API returned non-successful response"
             
-            if not text or not text.strip():
-                # Try alternative attribute
-                if hasattr(response, 'candidates') and response.candidates:
-                    text = response.candidates[0].content.parts[0].text
+            # First try the simple text accessor (like in obsolete code)
+            try:
+                text = response.text.strip()
+                if text:
+                    return text
+            except (AttributeError, ValueError) as e:
+                self.logger.debug(f"Could not access response.text directly: {e}")
             
-            text = text.strip()
+            # Try to extract from candidates
+            if hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'content') and candidate.content:
+                    if hasattr(candidate.content, 'parts') and candidate.content.parts:
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'text') and part.text:
+                                return part.text.strip()
             
-            if not text:
-                raise ProcessingError("Gemini returned empty response")
-            
-            return text
+            # If we get here, we couldn't extract text
+            self.logger.warning("Could not extract text from Gemini response, using fallback")
+            return "- Figure detected (analysis unavailable)\n- Unable to extract text from Gemini response"
             
         except Exception as e:
-            raise ProcessingError(f"Failed to extract Gemini response: {str(e)}") from e
+            self.logger.error(f"Error extracting Gemini response: {str(e)}")
+            return "- Figure detected (analysis unavailable)\n- Error processing Gemini response"
 
     def _parse_analysis_elements(self, analysis_text: str) -> Dict[str, List[str]]:
         """
