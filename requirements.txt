@@ -1,0 +1,39 @@
+# -----------------------------------------------------------------------------
+# --                           Core Application                              --
+# -----------------------------------------------------------------------------
+
+# AI & Natural Language Processing
+# Libraries for interacting with AI models and processing text.
+google-generativeai==0.5.4
+tiktoken==0.7.0
+
+# Document & Data Processing
+# Libraries for parsing, extracting, and manipulating data from documents.
+docling==0.1.1
+pandas==2.2.2
+pdfplumber==0.11.1
+Pillow==10.4.0
+pymupdf==1.24.1
+pytesseract==0.3.10
+
+# Web & Application Frameworks
+# Libraries for building the user interface and application server.
+streamlit==1.36.0
+
+# Utilities
+# General-purpose utility libraries.
+tqdm==4.66.4
+
+# -----------------------------------------------------------------------------
+# --                         Development & Testing                           --
+# -----------------------------------------------------------------------------
+
+# Code Quality & Formatting
+# Tools for linting, formatting, and static analysis to ensure code quality.
+black==24.4.2
+flake8==7.1.0
+mypy==1.10.0
+
+# Testing Frameworks
+# Libraries for writing and running automated tests.
+pytest==8.2.2
