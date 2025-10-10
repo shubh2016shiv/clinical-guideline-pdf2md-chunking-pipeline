@@ -23,6 +23,7 @@ Usage Pattern:
     No need to create or manage orchestration objects.
 """
 
+import logging
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
@@ -31,6 +32,9 @@ from ..configuration.batch_configuration import BatchConfiguration
 
 from doc2md_conversion_engine.models.config import DocumentProcessingConfig
 from doc2md_conversion_engine.engine.document_processor import DocumentProcessor
+
+# Create module logger
+logger = logging.getLogger(__name__)
 
 
 def convert_single_pdf_to_markdown(
@@ -77,10 +81,10 @@ def convert_single_pdf_to_markdown(
         ... )
     """
 
-    # Initialize processing configuration with default Gemini settings
+    # Initialize processing configuration with Gemini settings
     processing_config = DocumentProcessingConfig(
-        gemini_api_key="GEMINI_KEY_HERE",
-        enable_gemini=True,
+        gemini_api_key=gemini_api_key or "GEMINI_API_KEY_HERE",
+        enable_gemini=enable_gemini or True,  # Enable Gemini by default or use provided value
         extract_tables=True
     )
 
@@ -99,6 +103,7 @@ def convert_single_pdf_to_markdown(
         # Set optimized processor in task manager
         if hasattr(client, 'task_manager'):
             client.task_manager.processor = processor
+            logger.info(f"Injected configured processor with Gemini enabled={processor.config.enable_gemini}, API key present={bool(processor.config.gemini_api_key)}")
 
         # Process document and return results
         return client.orchestrate_single_document(
