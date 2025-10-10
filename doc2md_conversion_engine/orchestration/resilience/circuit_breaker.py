@@ -187,11 +187,13 @@ class CircuitBreaker:
             return True
         
         # Circuit is open, check if timeout has elapsed
-        if self.last_failure_time and (time.time() - self.last_failure_time) > self.timeout:
-            # Timeout elapsed, close circuit for test operation
-            self.is_open = False
-            self.failures = 0
-            return True
+        if self.last_failure_time:
+            elapsed_time = time.time() - self.last_failure_time
+            if elapsed_time > self.timeout:
+                # Timeout elapsed, close circuit for test operation
+                self.is_open = False
+                self.failures = 0
+                return True
         
         # Circuit is open and timeout has not elapsed, block operation
         return False

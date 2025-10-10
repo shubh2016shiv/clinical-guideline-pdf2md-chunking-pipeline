@@ -108,14 +108,14 @@ class ProcessorPool:
     
     async def initialize(self) -> None:
         """
-        Initialize the processor pool by creating all processor instances.
+        Initialize the processor pool by creating all processor instances concurrently.
         
-        Creates pool_size processor instances and adds them to the
+        Creates pool_size processor instances in parallel and adds them to the
         available queue, making them ready for use. This is an expensive
-        operation as it initializes all processors up front.
+        operation but concurrent initialization significantly reduces startup time.
         
         Side Effects:
-            - Creates pool_size processor instances
+            - Creates pool_size processor instances concurrently
             - Adds all processors to available queue
             - Sets _initialized to True
             - Logs initialization progress
@@ -138,15 +138,21 @@ class ProcessorPool:
         # Import here to avoid circular dependency
         from ...engine.document_processor import DocumentProcessor
         
-        # Create all processor instances
-        for i in range(self.pool_size):
-            # Create new processor with shared configuration
-            processor = DocumentProcessor(self.config)
-            
-            # Add to processors list for tracking
-            self.processors.append(processor)
-            
-            # Add to available queue (ready for use)
+        async def create_processor():
+            """Create a processor in thread pool to avoid blocking event loop."""
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None,
+                lambda: DocumentProcessor(self.config)
+            )
+        
+        # Create all processors concurrently
+        self.processors = await asyncio.gather(*[
+            create_processor() for _ in range(self.pool_size)
+        ])
+        
+        # Add all processors to available queue
+        for processor in self.processors:
             await self.available.put(processor)
         
         # Mark pool as initialized

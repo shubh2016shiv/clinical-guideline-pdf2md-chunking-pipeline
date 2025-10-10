@@ -4,6 +4,8 @@
 import logging
 import os
 import uuid
+from bisect import bisect_right
+from io import StringIO
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -92,7 +94,7 @@ class ContentExtractor:
         pipeline_options.images_scale = self.config.docling_images_scale
         pipeline_options.generate_page_images = True
         pipeline_options.generate_picture_images = self.config.docling_generate_pictures
-        
+        pipeline_options.do_ocr = False
         document_converter = DocumentConverter(
             format_options={
                 InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
@@ -234,6 +236,25 @@ class ContentExtractor:
         headers.sort(key=lambda h: (h[0], h[1]))
         return headers
 
+    def _build_header_index(
+        self, headers: List[Tuple[int, float, int, str, str]]
+    ) -> Dict[int, List[Tuple[float, str, str]]]:
+        """
+        Build page-indexed header lookup structure for efficient binary search.
+        
+        Args:
+            headers: List of extracted headers (page, y_pos, level, title, ref)
+            
+        Returns:
+            Dictionary mapping page_number -> [(y_pos, title, ref), ...]
+        """
+        index: Dict[int, List[Tuple[float, str, str]]] = {}
+        for page, y_pos, level, title, ref in headers:
+            if page not in index:
+                index[page] = []
+            index[page].append((y_pos, title, ref))
+        return index
+
     def _get_bbox_top_y(self, provenance: Any) -> float:
         """
         Extract top Y coordinate from provenance bounding box.
@@ -267,33 +288,51 @@ class ContentExtractor:
         Returns:
             List of figure metadata dictionaries
         """
-        pictures = list(self._iterate_pictures(docling_doc))
-        if not pictures:
+        # Count pictures for progress bar (lightweight iteration)
+        picture_count = sum(1 for _ in self._iterate_pictures(docling_doc))
+        if picture_count == 0:
             return []
+        
+        # Build header index for efficient lookups
+        header_index = self._build_header_index(headers)
         
         figures = []
         progress_bar = self._progress_manager.create_progress_bar(
-            total=len(pictures),
+            total=picture_count,
             desc="Figures"
         )
         
         try:
             max_workers = max(1, self.config.max_image_workers)
             
+            # Process pictures lazily without list materialization
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [
-                    executor.submit(self._process_single_figure, pdf_path, docling_doc, pic, headers)
-                    for pic in pictures
+                # Create list of futures first to ensure stable collection
+                futures_list = [
+                    executor.submit(self._process_single_figure, pdf_path, docling_doc, pic, header_index)
+                    for pic in self._iterate_pictures(docling_doc)
                 ]
                 
-                for future in as_completed(futures):
+                # Track the number of processed futures
+                processed_count = 0
+                
+                for future in as_completed(futures_list):
                     try:
                         figure_data = future.result()
                         figures.append(figure_data)
                     except Exception as e:
                         self.logger.error(f"Figure extraction failed: {str(e)}")
                     finally:
+                        processed_count += 1
                         progress_bar.update(1)
+                
+                # Ensure progress bar is complete
+                if processed_count < picture_count:
+                    self.logger.warning(
+                        f"Progress tracking mismatch: processed {processed_count}/{picture_count} figures"
+                    )
+                    # Force progress bar to completion if needed
+                    progress_bar.update(picture_count - processed_count)
         finally:
             progress_bar.close()
         
@@ -324,7 +363,7 @@ class ContentExtractor:
         pdf_path: Path,
         docling_doc: Any,
         picture_item: Any,
-        headers: List[Tuple[int, float, int, str, str]]
+        header_index: Dict[int, List[Tuple[float, str, str]]]
     ) -> Dict[str, Any]:
         """
         Process a single figure: extract, crop, and generate metadata.
@@ -333,7 +372,7 @@ class ContentExtractor:
             pdf_path: Source PDF path
             docling_doc: Docling document
             picture_item: Picture element from Docling
-            headers: Document headers for section association
+            header_index: Page-indexed header lookup structure
             
         Returns:
             Figure metadata dictionary
@@ -346,9 +385,9 @@ class ContentExtractor:
         # Extract image
         image = self._extract_picture_image(pdf_path, docling_doc, picture_item)
         
-        # Associate with nearest section
+        # Associate with nearest section using efficient lookup
         section_title, section_ref = self._find_nearest_header(
-            headers,
+            header_index,
             picture_item.prov
         )
         
@@ -535,38 +574,37 @@ class ContentExtractor:
 
     def _find_nearest_header(
         self,
-        headers: List[Tuple[int, float, int, str, str]],
+        header_index: Dict[int, List[Tuple[float, str, str]]],
         provenance: Any
     ) -> Tuple[str, str]:
         """
-        Find the nearest preceding header for a given position.
+        Find the nearest preceding header using page-indexed binary search.
         
         Args:
-            headers: List of extracted headers
+            header_index: Page-indexed header lookup structure
             provenance: Element provenance with position
             
         Returns:
             Tuple of (header_title, header_reference)
         """
-        if not provenance or not headers:
+        if not provenance or not header_index:
             return "", ""
         
         page_number = provenance[0].page_no
         y_position = self._get_bbox_top_y(provenance)
         
-        # Find headers on same page before this position, or on previous pages
-        candidates = [
-            h for h in headers
-            if (h[0] < page_number) or (h[0] == page_number and h[1] <= y_position)
-        ]
+        # Check same page with binary search
+        if page_number in header_index:
+            page_headers = header_index[page_number]
+            idx = bisect_right([h[0] for h in page_headers], y_position)
+            if idx > 0:
+                return page_headers[idx - 1][1], page_headers[idx - 1][2]
         
-        if candidates:
-            nearest = candidates[-1]  # Last matching header
-            return nearest[3], nearest[4]  # title, reference
-        
-        # Fallback to first header
-        if headers:
-            return headers[0][3], headers[0][4]
+        # Check previous pages in reverse order
+        for prev_page in range(page_number - 1, 0, -1):
+            if prev_page in header_index:
+                last_header = header_index[prev_page][-1]
+                return last_header[1], last_header[2]
         
         return "", ""
 
@@ -590,6 +628,9 @@ class ContentExtractor:
         except ImportError:
             self.logger.warning("pdfplumber not available. Skipping table extraction.")
             return []
+        
+        # Build header index for efficient lookups
+        header_index = self._build_header_index(headers)
         
         tables = []
         tables_dir = self._current_output_dir / self.config.tables_subdir
@@ -620,9 +661,9 @@ class ContentExtractor:
                         if self.config.write_table_csv:
                             csv_path = self._save_table_csv(table_data, table_id, tables_dir)
                         
-                        # Find nearest section
+                        # Find nearest section using efficient lookup
                         section_title, section_ref = self._find_nearest_header_by_page(
-                            headers,
+                            header_index,
                             page_number
                         )
                         
@@ -642,7 +683,7 @@ class ContentExtractor:
 
     def _convert_table_to_markdown(self, table_data: List[List[str]]) -> str:
         """
-        Convert table data to markdown format.
+        Convert table data to markdown format using efficient string buffer.
         
         Args:
             table_data: 2D list of table cells
@@ -657,19 +698,25 @@ class ContentExtractor:
             """Escape pipe characters in cell content."""
             return (cell or "").replace("|", r"\|").strip()
         
+        buffer = StringIO()
+        
         # Header row
-        header = "|" + "|".join(escape_cell(cell) for cell in table_data[0]) + "|"
+        buffer.write("|")
+        buffer.write("|".join(escape_cell(cell) for cell in table_data[0]))
+        buffer.write("|\n")
         
         # Separator row
-        separator = "|" + "|".join(["---"] * len(table_data[0])) + "|"
+        buffer.write("|")
+        buffer.write("|".join(["---"] * len(table_data[0])))
+        buffer.write("|\n")
         
         # Data rows
-        rows = [
-            "|" + "|".join(escape_cell(cell) for cell in row) + "|"
-            for row in table_data[1:]
-        ]
+        for row in table_data[1:]:
+            buffer.write("|")
+            buffer.write("|".join(escape_cell(cell) for cell in row))
+            buffer.write("|\n")
         
-        return "\n".join([header, separator] + rows)
+        return buffer.getvalue()
 
     def _save_table_csv(
         self,
@@ -708,27 +755,31 @@ class ContentExtractor:
 
     def _find_nearest_header_by_page(
         self,
-        headers: List[Tuple[int, float, int, str, str]],
+        header_index: Dict[int, List[Tuple[float, str, str]]],
         page_number: int
     ) -> Tuple[str, str]:
         """
-        Find the nearest header for a given page.
+        Find the nearest header for a given page using indexed lookup.
         
         Args:
-            headers: List of extracted headers
+            header_index: Page-indexed header lookup structure
             page_number: Page number to find header for
             
         Returns:
             Tuple of (header_title, header_reference)
         """
-        if not headers:
+        if not header_index:
             return "", ""
         
-        # Find headers on or before this page
-        candidates = [h for h in headers if h[0] <= page_number]
+        # Check current page first
+        if page_number in header_index:
+            last_header = header_index[page_number][-1]
+            return last_header[1], last_header[2]
         
-        if candidates:
-            nearest = candidates[-1]
-            return nearest[3], nearest[4]  # title, reference
+        # Check previous pages in reverse order
+        for prev_page in range(page_number - 1, 0, -1):
+            if prev_page in header_index:
+                last_header = header_index[prev_page][-1]
+                return last_header[1], last_header[2]
         
         return "", ""

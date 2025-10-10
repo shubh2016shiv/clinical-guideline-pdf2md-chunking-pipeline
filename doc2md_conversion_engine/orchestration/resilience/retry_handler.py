@@ -169,8 +169,11 @@ class RetryHandler:
         # Apply backoff strategy
         if self.strategy.use_exponential_backoff:
             # Exponential: delay doubles each time
-            # delay = base * (2 ** (attempt - 1))
-            delay = self.strategy.base_delay * (2 ** (attempt_number - 1))
+            # Cap exponent to prevent overflow
+            # max_delay / base_delay = max multiplier
+            max_exponent = int(self.strategy.max_delay / self.strategy.base_delay).bit_length()
+            safe_exponent = min(attempt_number - 1, max_exponent)
+            delay = self.strategy.base_delay * (2 ** safe_exponent)
         elif self.strategy.use_linear_backoff:
             # Linear: delay increases by base each time
             # delay = base * attempt

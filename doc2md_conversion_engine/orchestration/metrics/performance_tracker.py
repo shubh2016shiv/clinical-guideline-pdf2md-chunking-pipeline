@@ -322,15 +322,15 @@ class PerformanceTracker:
         # Extract timing information from tasks with durations
         durations = [t.duration for t in tasks if t.duration is not None]
         
-        # Count extracted resources (figures, tables) from successful tasks
-        total_figures = sum(
-            len(t.result.figures) for t in successful_tasks
-            if t.result and hasattr(t.result, 'figures')
-        )
-        total_tables = sum(
-            len(t.result.tables) for t in successful_tasks
-            if t.result and hasattr(t.result, 'tables')
-        )
+        # Count extracted resources (figures, tables) in single pass
+        total_figures = 0
+        total_tables = 0
+        
+        for task in successful_tasks:
+            if task.result and hasattr(task.result, 'figures'):
+                total_figures += len(task.result.figures)
+            if task.result and hasattr(task.result, 'tables'):
+                total_tables += len(task.result.tables)
         
         # Build comprehensive summary
         summary = {

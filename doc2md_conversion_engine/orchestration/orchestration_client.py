@@ -232,10 +232,15 @@ class OrchestrationClient:
         Returns:
             List of ProcessingTask objects with results
         
+        Note:
+            If use_async=True and called from within an async context,
+            this will raise RuntimeError. Use orchestrate_document_batch_async()
+            instead.
+        
         Example:
             >>> client = OrchestrationClient()
             >>> paths = ["/data/doc1.pdf", "/data/doc2.pdf"]
-            >>> tasks = client.convert_pdf_batch_to_markdown(paths)
+            >>> tasks = client.orchestrate_document_batch(paths)
             >>> successful = [t for t in tasks if t.result]
         """
         # Create tasks from paths
@@ -246,9 +251,54 @@ class OrchestrationClient:
         
         # Process based on mode
         if use_async:
-            return asyncio.run(self.batch_processor.process_batch_async(tasks))
+            # Check if we're already in an async context
+            try:
+                loop = asyncio.get_running_loop()
+                # We're in async context, can't use asyncio.run()
+                raise RuntimeError(
+                    "orchestrate_document_batch with use_async=True cannot be called "
+                    "from within an async context. Use orchestrate_document_batch_async() instead."
+                )
+            except RuntimeError as e:
+                # Check if this is our error or the "no running loop" error
+                if "orchestrate_document_batch" in str(e):
+                    raise
+                # No running loop, safe to use asyncio.run()
+                return asyncio.run(self.batch_processor.process_batch_async(tasks))
         else:
             return self.batch_processor.process_batch_sync(tasks)
+    
+    async def orchestrate_document_batch_async(
+        self,
+        pdf_paths: List[str],
+        output_path: Optional[str] = None
+    ) -> List[ProcessingTask]:
+        """
+        Process multiple documents asynchronously (for use in async contexts).
+        
+        This is the async version of orchestrate_document_batch, designed
+        to be called from within an async function or event loop.
+        
+        Args:
+            pdf_paths: List of PDF file paths
+            output_path: Optional base output directory
+        
+        Returns:
+            List of ProcessingTask objects with results
+        
+        Example:
+            >>> client = OrchestrationClient()
+            >>> paths = ["/data/doc1.pdf", "/data/doc2.pdf"]
+            >>> tasks = await client.orchestrate_document_batch_async(paths)
+            >>> successful = [t for t in tasks if t.result]
+        """
+        # Create tasks from paths
+        tasks = self.batch_processor.create_tasks_from_paths(
+            pdf_paths=pdf_paths,
+            output_path=output_path
+        )
+        
+        return await self.batch_processor.process_batch_async(tasks)
     
     def orchestrate_directory_processing(
         self,

@@ -28,6 +28,7 @@ from typing import List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .models.processing_task import ProcessingTask
+from .models.task_status import ProcessingStatus
 from .task_manager import TaskManager
 from .configuration.batch_configuration import BatchConfiguration
 from ..utils.progress import ProgressManager
@@ -151,7 +152,6 @@ class BatchProcessor:
             progress_bar.close()
         
         # Log batch summary
-        from .models.task_status import ProcessingStatus
         successful = sum(1 for t in completed_tasks if t.status == ProcessingStatus.COMPLETED)
         failed = sum(1 for t in completed_tasks if t.status == ProcessingStatus.FAILED)
         
@@ -235,7 +235,6 @@ class BatchProcessor:
             progress_bar.close()
         
         # Log batch summary
-        from .models.task_status import ProcessingStatus
         successful = sum(1 for t in completed_tasks if t.status == ProcessingStatus.COMPLETED)
         failed = sum(1 for t in completed_tasks if t.status == ProcessingStatus.FAILED)
         

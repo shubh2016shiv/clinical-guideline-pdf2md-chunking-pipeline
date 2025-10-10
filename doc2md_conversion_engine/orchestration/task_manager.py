@@ -112,8 +112,8 @@ class TaskManager:
         task.started_at = time.time()
         
         # Attempt processing with retries
-        while task.attempts < task.max_retries + 1:  # +1 for initial attempt
-            task.attempts += 1
+        for attempt in range(1, task.max_retries + 2):  # +1 for initial attempt
+            task.attempts = attempt
             task.status = ProcessingStatus.PROCESSING
             
             try:
@@ -147,22 +147,22 @@ class TaskManager:
                 # Task failed with exception
                 error_msg = str(e)
                 self.logger.warning(
-                    f"Processing attempt {task.attempts}/{task.max_retries + 1} failed "
+                    f"Processing attempt {attempt}/{task.max_retries + 1} failed "
                     f"for {Path(task.pdf_path).name}: {error_msg}"
                 )
                 task.error = error_msg
                 self.circuit_breaker.record_failure()
             
             # Check if should retry
-            if self.retry_handler.should_retry(task.attempts) and self.batch_config.enable_retries:
+            if self.retry_handler.should_retry(attempt) and self.batch_config.enable_retries:
                 task.status = ProcessingStatus.RETRYING
                 
                 # Wait before retry with backoff
-                await self.retry_handler.sleep_before_retry_async(task.attempts)
+                await self.retry_handler.sleep_before_retry_async(attempt)
                 
                 self.logger.info(
                     f"Retrying {Path(task.pdf_path).name} "
-                    f"(attempt {task.attempts + 1}/{task.max_retries + 1})"
+                    f"(attempt {attempt + 1}/{task.max_retries + 1})"
                 )
         
         # All retries exhausted
@@ -242,14 +242,14 @@ class TaskManager:
         
         task.started_at = time.time()
         
-        # Attempt processing with retries
-        for attempt in range(1, task.max_retries + 2):  # +1 for initial
-            task.attempts = attempt
-            task.status = ProcessingStatus.PROCESSING
-            
-            try:
-                # Create processor and execute
-                processor = DocumentProcessor()
+        # Create processor once outside retry loop
+        processor = DocumentProcessor()
+        try:
+            # Attempt processing with retries
+            for attempt in range(1, task.max_retries + 2):  # +1 for initial
+                task.attempts = attempt
+                task.status = ProcessingStatus.PROCESSING
+                
                 try:
                     result = processor.process_document(
                         pdf_path=task.pdf_path,
@@ -264,29 +264,29 @@ class TaskManager:
                     self.circuit_breaker.record_success()
                     
                     return task
-                finally:
-                    processor.shutdown()
+                        
+                except Exception as e:
+                    # Task failed
+                    error_msg = str(e)
+                    self.logger.warning(
+                        f"Processing attempt {attempt}/{task.max_retries + 1} failed "
+                        f"for {Path(task.pdf_path).name}: {error_msg}"
+                    )
+                    task.error = error_msg
+                    self.circuit_breaker.record_failure()
                     
-            except Exception as e:
-                # Task failed
-                error_msg = str(e)
-                self.logger.warning(
-                    f"Processing attempt {attempt}/{task.max_retries + 1} failed "
-                    f"for {Path(task.pdf_path).name}: {error_msg}"
-                )
-                task.error = error_msg
-                self.circuit_breaker.record_failure()
-                
-                # Check if should retry
-                if self.retry_handler.should_retry(attempt) and self.batch_config.enable_retries:
-                    task.status = ProcessingStatus.RETRYING
-                    self.retry_handler.sleep_before_retry(attempt)
-        
-        # All retries exhausted
-        task.status = ProcessingStatus.FAILED
-        task.completed_at = time.time()
-        
-        return task
+                    # Check if should retry
+                    if self.retry_handler.should_retry(attempt) and self.batch_config.enable_retries:
+                        task.status = ProcessingStatus.RETRYING
+                        self.retry_handler.sleep_before_retry(attempt)
+            
+            # All retries exhausted
+            task.status = ProcessingStatus.FAILED
+            task.completed_at = time.time()
+            
+            return task
+        finally:
+            processor.shutdown()
 
 
 
