@@ -68,3 +68,7 @@ temp_*.py
 *_test.py
 *.bak
 *.backup
+
+# Obsolete files and directories
+*_OBSELETE*
+*_OBSELETE/
