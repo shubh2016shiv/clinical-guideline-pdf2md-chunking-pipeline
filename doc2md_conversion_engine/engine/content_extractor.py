@@ -94,7 +94,7 @@ class ContentExtractor:
         pipeline_options.images_scale = self.config.docling_images_scale
         pipeline_options.generate_page_images = True
         pipeline_options.generate_picture_images = self.config.docling_generate_pictures
-        pipeline_options.do_ocr = False
+        pipeline_options.do_ocr = True
         document_converter = DocumentConverter(
             format_options={
                 InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
@@ -288,56 +288,50 @@ class ContentExtractor:
         Returns:
             List of figure metadata dictionaries
         """
-        # Count pictures for progress bar (lightweight iteration)
-        picture_count = sum(1 for _ in self._iterate_pictures(docling_doc))
-        if picture_count == 0:
+        # Quick check if there are any pictures to process
+        pictures = list(self._iterate_pictures(docling_doc))
+        if not pictures:
             return []
         
-        # Build header index for efficient lookups
+        # Build header index for efficient section lookups
         header_index = self._build_header_index(headers)
         
+        # Prepare result container
         figures = []
-        progress_bar = self._progress_manager.create_progress_bar(
-            total=picture_count,
-            desc="Figures"
-        )
         
         try:
+            # Determine optimal number of workers based on configuration
             max_workers = max(1, self.config.max_image_workers)
             
-            # Process pictures lazily without list materialization
+            # Process pictures in parallel using thread pool
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Create list of futures first to ensure stable collection
-                futures_list = [
-                    executor.submit(self._process_single_figure, pdf_path, docling_doc, pic, header_index)
-                    for pic in self._iterate_pictures(docling_doc)
-                ]
+                # Submit all figure processing tasks to the executor
+                future_to_picture = {
+                    executor.submit(
+                        self._process_single_figure, 
+                        pdf_path, 
+                        docling_doc, 
+                        picture, 
+                        header_index
+                    ): picture for picture in pictures
+                }
                 
-                # Track the number of processed futures
-                processed_count = 0
-                
-                for future in as_completed(futures_list):
+                # Collect results as they complete
+                for future in as_completed(future_to_picture):
                     try:
+                        # Get the processed figure data
                         figure_data = future.result()
-                        figures.append(figure_data)
+                        if figure_data:  # Only append valid results
+                            figures.append(figure_data)
                     except Exception as e:
+                        # Log error but continue processing other figures
                         self.logger.error(f"Figure extraction failed: {str(e)}")
-                    finally:
-                        processed_count += 1
-                        progress_bar.update(1)
-                
-                # Ensure progress bar is complete
-                if processed_count < picture_count:
-                    self.logger.warning(
-                        f"Progress tracking mismatch: processed {processed_count}/{picture_count} figures"
-                    )
-                    # Force progress bar to completion if needed
-                    progress_bar.update(picture_count - processed_count)
-        finally:
-            progress_bar.close()
+        except Exception as e:
+            # Catch any unexpected errors in the thread pool management
+            self.logger.error(f"Error in figure extraction process: {str(e)}")
         
-        # Sort by page and figure ID
-        figures.sort(key=lambda f: (f["page"], f["figure_id"]))
+        # Sort figures by page number and figure ID for consistent output
+        figures.sort(key=lambda f: (f.get("page", 0), f.get("figure_id", "")))
         return figures
 
     def _iterate_pictures(self, docling_doc: Any):
