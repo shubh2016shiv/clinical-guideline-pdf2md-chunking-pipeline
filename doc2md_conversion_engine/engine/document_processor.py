@@ -151,6 +151,32 @@ class DocumentProcessor:
             self.logger.exception("Unexpected processing error")
             raise ProcessingError(f"Processing failure: {str(e)}") from e
 
+    def convert_single_pdf_to_markdown(
+            self,
+            pdf_path: str,
+            output_path: Optional[str] = None,
+            output_filename: Optional[str] = None
+    ) -> DocumentResult:
+        """
+        Backward compatibility method that maps to process_document.
+        
+        This ensures older code that calls convert_single_pdf_to_markdown still works.
+        
+        Args:
+            pdf_path: Path to source PDF document
+            output_path: Custom output directory (overrides config)
+            output_filename: Custom output filename without extension
+            
+        Returns:
+            DocumentResult containing processing artifacts and metadata
+        """
+        self.logger.debug("convert_single_pdf_to_markdown called (backward compatibility)")
+        return self.process_document(
+            pdf_path=pdf_path,
+            output_path=output_path,
+            output_filename=output_filename
+        )
+            
     def shutdown(self) -> None:
         """Clean up processor resources and connections."""
         self.logger.info("Shutting down DocumentProcessor")

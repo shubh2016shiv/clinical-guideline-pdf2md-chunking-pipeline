@@ -200,10 +200,11 @@ class TaskManager:
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(
                     None,
-                    processor.convert_single_pdf_to_markdown,
-                    task.pdf_path,
-                    task.output_path,
-                    task.output_filename
+                    lambda: processor.process_document(  # Use correct method with lambda wrapper
+                        pdf_path=task.pdf_path,
+                        output_path=task.output_path,
+                        output_filename=task.output_filename
+                    )
                 )
                 return result
             finally:

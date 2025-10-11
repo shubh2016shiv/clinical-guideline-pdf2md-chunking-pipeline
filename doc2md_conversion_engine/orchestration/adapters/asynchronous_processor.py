@@ -24,32 +24,43 @@ Usage Pattern:
 """
 
 import asyncio
+import logging
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
 from ..orchestration_client import OrchestrationClient
 from ..configuration.batch_configuration import BatchConfiguration
 
+from doc2md_conversion_engine.models.config import DocumentProcessingConfig
+from doc2md_conversion_engine.engine.document_processor import DocumentProcessor
 
-async def process_document_async(
+# Create module logger
+logger = logging.getLogger(__name__)
+
+
+async def convert_single_pdf_to_markdown_async(
     pdf_path: str,
     output_path: Optional[str] = None,
     output_filename: Optional[str] = None,
     max_retries: int = 3,
+    gemini_api_key: Optional[str] = None,
+    enable_gemini: bool = False,
     **config_options
 ):
     """
-    Process a single PDF document asynchronously.
+    Process a single PDF document asynchronously with automatic orchestration.
     
-    Async version of process_document. Processes document without
-    blocking the event loop, suitable for integration with async
-    frameworks and applications.
+    Async version of convert_single_pdf_to_markdown. Processes document without
+    blocking the event loop, suitable for integration with async frameworks
+    and applications. Supports Gemini AI for figure summarization.
     
     Args:
         pdf_path: Path to PDF file to process
         output_path: Optional directory for output files
         output_filename: Optional custom output filename (no extension)
         max_retries: Maximum retry attempts on failure (default: 3)
+        gemini_api_key: Google Gemini API key for figure summarization (optional)
+        enable_gemini: Whether to enable Gemini AI for figure summarization (default: False)
         **config_options: Additional BatchConfiguration parameters
     
     Returns:
@@ -62,46 +73,75 @@ async def process_document_async(
     Example:
         >>> # In async context
         >>> async def main():
-        ...     result = await process_document_async("/data/document.pdf")
+        ...     result = await convert_single_pdf_to_markdown_async(
+        ...         "/data/document.pdf",
+        ...         enable_gemini=True,
+        ...         gemini_api_key="your-api-key"
+        ...     )
         ...     print(f"Output: {result.markdown_path}")
         >>> 
         >>> asyncio.run(main())
     """
-    # Create configuration
-    config = BatchConfiguration(
+    # Initialize processing configuration
+    config_kwargs = {
+        'enable_gemini': enable_gemini,
+        'extract_tables': True,
+        'write_table_csv': True
+    }
+
+    if gemini_api_key is not None:
+        config_kwargs['gemini_api_key'] = gemini_api_key
+
+    if output_path:
+        config_kwargs['output_dir'] = output_path
+
+    processing_config = DocumentProcessingConfig(**config_kwargs)
+
+    # Create optimized batch configuration
+    batch_config = BatchConfiguration(
         max_retries_per_task=max_retries,
-        enable_progress_reporting=config_options.get('show_progress', False),
-        **{k: v for k, v in config_options.items() if k != 'show_progress'}
+        enable_progress_reporting=config_options.pop('show_progress', False),
+        **config_options
     )
-    
+
+    # Initialize document processor with configuration
+    processor = DocumentProcessor(processing_config)
+
     # Process in executor to avoid blocking
     loop = asyncio.get_event_loop()
-    
+
     def _process():
-        with OrchestrationClient(batch_config=config) as client:
+        with OrchestrationClient(batch_config=batch_config) as client:
+            if hasattr(client, 'task_manager'):
+                client.task_manager.processor = processor
+                logger.info(f"Injected configured processor with Gemini enabled={processor.config.enable_gemini}")
+            
             return client.orchestrate_single_document(
                 pdf_path=pdf_path,
                 output_path=output_path,
                 output_filename=output_filename
             )
-    
+
     result = await loop.run_in_executor(None, _process)
     return result
 
 
-async def process_documents_async(
+async def convert_pdf_batch_to_markdown_async(
     pdf_paths: List[str],
     output_path: Optional[str] = None,
     max_concurrent: int = 5,
     max_retries: int = 3,
     show_progress: bool = False,
+    gemini_api_key: Optional[str] = None,
+    enable_gemini: bool = False,
     **config_options
 ) -> List[Dict[str, Any]]:
     """
     Process multiple PDF documents asynchronously as a batch.
     
     Processes all documents concurrently without blocking, ideal for
-    async frameworks and high-throughput scenarios.
+    async frameworks and high-throughput scenarios. Supports Gemini AI
+    for figure summarization across all documents.
     
     Args:
         pdf_paths: List of paths to PDF files
@@ -109,6 +149,8 @@ async def process_documents_async(
         max_concurrent: Maximum concurrent tasks (default: 5)
         max_retries: Maximum retry attempts per document (default: 3)
         show_progress: Show progress bar (default: False for async)
+        gemini_api_key: Google Gemini API key for figure summarization (optional)
+        enable_gemini: Whether to enable Gemini AI for figure summarization (default: False)
         **config_options: Additional BatchConfiguration parameters
     
     Returns:
@@ -117,9 +159,11 @@ async def process_documents_async(
     Example:
         >>> async def main():
         ...     paths = ["/data/doc1.pdf", "/data/doc2.pdf"]
-        ...     results = await process_documents_async(
+        ...     results = await convert_pdf_batch_to_markdown_async(
         ...         paths,
-        ...         max_concurrent=10
+        ...         max_concurrent=10,
+        ...         enable_gemini=True,
+        ...         gemini_api_key="your-api-key"
         ...     )
         ...     
         ...     successful = [r for r in results if r['success']]
@@ -127,18 +171,35 @@ async def process_documents_async(
         >>> 
         >>> asyncio.run(main())
     """
-    # Create configuration
+    # Create DocumentProcessingConfig kwargs for batch processing
+    doc_proc_kwargs = {
+        'enable_gemini': enable_gemini,
+        'extract_tables': True,
+        'write_table_csv': True
+    }
+    if gemini_api_key:
+        doc_proc_kwargs['gemini_api_key'] = gemini_api_key
+
+    if output_path:
+        doc_proc_kwargs['output_dir'] = output_path
+
+    # Create BatchConfiguration
     config = BatchConfiguration(
         max_concurrent_tasks=max_concurrent,
         max_retries_per_task=max_retries,
         enable_progress_reporting=show_progress,
         **config_options
     )
-    
+
     # Create client and process
     client = OrchestrationClient(batch_config=config)
-    
+
     try:
+        # Inject processor config kwargs into the task manager
+        if hasattr(client, 'task_manager'):
+            client.task_manager.processor_config_kwargs = doc_proc_kwargs
+            logger.info(f"Configured task manager for async batch processing (Gemini enabled={enable_gemini}, fresh processor per task)")
+        
         # Get processor pool initialized if needed
         if config.enable_processor_pooling:
             await client._get_processor_pool()
@@ -171,20 +232,23 @@ async def process_documents_async(
         client.cleanup()
 
 
-async def process_directory_async(
+async def convert_directory_pdfs_to_markdown_async(
     directory_path: str,
     file_pattern: str = "*.pdf",
     output_path: Optional[str] = None,
     max_concurrent: int = 5,
     max_retries: int = 3,
     show_progress: bool = False,
+    gemini_api_key: Optional[str] = None,
+    enable_gemini: bool = False,
     **config_options
 ) -> Dict[str, Any]:
     """
     Process all PDF files in a directory asynchronously.
     
     Discovers and processes all matching PDF files without blocking,
-    returning comprehensive summary.
+    returning comprehensive summary. Supports Gemini AI for figure
+    summarization across all documents.
     
     Args:
         directory_path: Path to directory containing PDF files
@@ -193,6 +257,8 @@ async def process_directory_async(
         max_concurrent: Maximum concurrent tasks (default: 5)
         max_retries: Maximum retry attempts per document (default: 3)
         show_progress: Show progress bar (default: False for async)
+        gemini_api_key: Google Gemini API key for figure summarization (optional)
+        enable_gemini: Whether to enable Gemini AI for figure summarization (default: False)
         **config_options: Additional BatchConfiguration parameters
     
     Returns:
@@ -200,9 +266,11 @@ async def process_directory_async(
     
     Example:
         >>> async def main():
-        ...     summary = await process_directory_async(
+        ...     summary = await convert_directory_pdfs_to_markdown_async(
         ...         "/data/pdfs/",
-        ...         max_concurrent=10
+        ...         max_concurrent=10,
+        ...         enable_gemini=True,
+        ...         gemini_api_key="your-api-key"
         ...     )
         ...     print(f"Success rate: {summary['success_rate']:.1f}%")
         >>> 
@@ -229,12 +297,14 @@ async def process_directory_async(
         }
     
     # Process all files asynchronously
-    results = await process_documents_async(
+    results = await convert_pdf_batch_to_markdown_async(
         pdf_paths=pdf_paths,
         output_path=output_path,
         max_concurrent=max_concurrent,
         max_retries=max_retries,
         show_progress=show_progress,
+        gemini_api_key=gemini_api_key,
+        enable_gemini=enable_gemini,
         **config_options
     )
     
@@ -257,10 +327,12 @@ async def process_directory_async(
     return summary
 
 
-async def process_concurrent_batches(
+async def convert_concurrent_batches_async(
     batch_paths: List[List[str]],
     output_path: Optional[str] = None,
     max_concurrent_per_batch: int = 5,
+    gemini_api_key: Optional[str] = None,
+    enable_gemini: bool = False,
     **config_options
 ) -> List[List[Dict[str, Any]]]:
     """
@@ -268,12 +340,15 @@ async def process_concurrent_batches(
     
     Advanced async pattern for processing multiple independent batches
     simultaneously. Each batch is processed internally with its own
-    concurrency control.
+    concurrency control. Supports Gemini AI for figure summarization
+    across all batches.
     
     Args:
         batch_paths: List of batches, where each batch is a list of PDF paths
         output_path: Optional base directory for output files
         max_concurrent_per_batch: Max concurrent tasks within each batch
+        gemini_api_key: Google Gemini API key for figure summarization (optional)
+        enable_gemini: Whether to enable Gemini AI for figure summarization (default: False)
         **config_options: Additional BatchConfiguration parameters
     
     Returns:
@@ -286,9 +361,11 @@ async def process_concurrent_batches(
         ...     batch2 = ["/data/batch2/doc1.pdf", "/data/batch2/doc2.pdf"]
         ...     batch3 = ["/data/batch3/doc1.pdf", "/data/batch3/doc2.pdf"]
         ...     
-        ...     results = await process_concurrent_batches(
+        ...     results = await convert_concurrent_batches_async(
         ...         [batch1, batch2, batch3],
-        ...         max_concurrent_per_batch=3
+        ...         max_concurrent_per_batch=3,
+        ...         enable_gemini=True,
+        ...         gemini_api_key="your-api-key"
         ...     )
         ...     
         ...     for i, batch_results in enumerate(results):
@@ -298,10 +375,12 @@ async def process_concurrent_batches(
     """
     # Process all batches concurrently
     batch_tasks = [
-        process_documents_async(
+        convert_pdf_batch_to_markdown_async(
             pdf_paths=batch,
             output_path=output_path,
             max_concurrent=max_concurrent_per_batch,
+            gemini_api_key=gemini_api_key,
+            enable_gemini=enable_gemini,
             **config_options
         )
         for batch in batch_paths
@@ -311,4 +390,36 @@ async def process_concurrent_batches(
     results = await asyncio.gather(*batch_tasks, return_exceptions=False)
     
     return results
+
+
+def get_default_conversion_settings_async() -> Dict[str, Any]:
+    """
+    Get default configuration parameters for async processing.
+    
+    Returns dictionary of default configuration values that can be
+    customized and passed to async processing functions.
+    
+    Returns:
+        Dictionary with default configuration parameters
+    
+    Example:
+        >>> # Get defaults and customize
+        >>> config = get_default_conversion_settings_async()
+        >>> config['max_concurrent_tasks'] = 10
+        >>> config['enable_processor_pooling'] = True
+        >>> 
+        >>> # Use with processing function
+        >>> results = await convert_pdf_batch_to_markdown_async(paths, **config)
+    """
+    default_config = BatchConfiguration()
+    return {
+        'max_concurrent': default_config.max_concurrent_tasks,
+        'max_retries': default_config.max_retries_per_task,
+        'retry_delay': default_config.retry_delay_seconds,
+        'enable_exponential_backoff': default_config.exponential_backoff,
+        'task_timeout': default_config.task_timeout_seconds,
+        'enable_processor_pooling': default_config.enable_processor_pooling,
+        'processor_pool_size': default_config.processor_pool_size,
+        'show_progress': default_config.enable_progress_reporting
+    }
 

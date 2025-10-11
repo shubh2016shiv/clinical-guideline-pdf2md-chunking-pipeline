@@ -56,10 +56,11 @@ from .orchestration import (
     get_default_conversion_settings,
     
     # Async API functions
-    process_document_async,
-    process_documents_async,
-    process_directory_async,
-    process_concurrent_batches
+    convert_single_pdf_to_markdown_async,
+    convert_pdf_batch_to_markdown_async,
+    convert_directory_pdfs_to_markdown_async,
+    convert_concurrent_batches_async,
+    get_default_conversion_settings_async
 )
 
 # Import high-level entry points
@@ -94,10 +95,11 @@ __all__ = [
     "get_default_conversion_settings",
     
     # Async API functions
-    "process_document_async",
-    "process_documents_async",
-    "process_directory_async",
-    "process_concurrent_batches",
+    "convert_single_pdf_to_markdown_async",
+    "convert_pdf_batch_to_markdown_async",
+    "convert_directory_pdfs_to_markdown_async",
+    "convert_concurrent_batches_async",
+    "get_default_conversion_settings_async",
     
     # High-level entry points
     "start_single_doc_processing",

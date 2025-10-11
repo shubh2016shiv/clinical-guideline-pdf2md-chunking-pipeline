@@ -146,7 +146,15 @@ class OrchestrationClient:
             # Import here to avoid circular dependency
             from ..models.config import DocumentProcessingConfig
             
-            config = DocumentProcessingConfig()
+            # Use processor_config_kwargs from task manager if available (includes Gemini config)
+            # Otherwise fallback to default config for backward compatibility
+            if hasattr(self.task_manager, 'processor_config_kwargs') and self.task_manager.processor_config_kwargs is not None:
+                config = DocumentProcessingConfig(**self.task_manager.processor_config_kwargs)
+                self.logger.info(f"Initializing processor pool with configured settings (Gemini enabled={config.enable_gemini})")
+            else:
+                config = DocumentProcessingConfig()
+                self.logger.debug("Initializing processor pool with default settings")
+            
             self._processor_pool = ProcessorPool(
                 config=config,
                 pool_size=self.batch_config.processor_pool_size
