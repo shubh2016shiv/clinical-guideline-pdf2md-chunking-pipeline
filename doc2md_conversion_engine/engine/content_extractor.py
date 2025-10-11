@@ -315,23 +315,15 @@ class ContentExtractor:
         
         # Log Docling compatibility
         self.logger.info("\nDocling Integration Compatibility:")
-        try:
-            pipeline_test = PdfPipelineOptions()
-            
-            if hasattr(pipeline_test, 'accelerator'):
-                self.logger.info("  [SUPPORTED] Docling 'accelerator' attribute")
-            elif hasattr(pipeline_test, 'device'):
-                self.logger.info("  [SUPPORTED] Docling 'device' attribute")
-            elif hasattr(pipeline_test, 'cuda_device'):
-                self.logger.info("  [SUPPORTED] Docling 'cuda_device' attribute")
-            else:
-                self.logger.warning("  [UNSUPPORTED] Explicit accelerator configuration")
-                self.logger.info("  [FALLBACK] Using environment variables and defaults")
         
-        except Exception as e:
-            self.logger.warning(f"  [ERROR] Could not check Docling compatibility: {e}")
+        # Check if Docling supports modern explicit configuration. If not, inform the user
+        # that a fallback method (environment variables) will be used.
+        if hasattr(PdfPipelineOptions(), 'accelerator') or hasattr(PdfPipelineOptions(), 'device'):
+            self.logger.info("  [SUPPORTED] Explicit accelerator configuration")
+        else:
+            self.logger.info("  [UNSUPPORTED] Explicit accelerator configuration")
+            self.logger.info("  [FALLBACK] Using environment variables and defaults")
         
-        # Log configuration flags
         self.logger.info("\nConfiguration Flags:")
         self.logger.info(f"  Force CPU: {self.config.force_cpu}")
         self.logger.info(f"  GPU Acceleration Enabled: {self.config.enable_gpu_acceleration}")

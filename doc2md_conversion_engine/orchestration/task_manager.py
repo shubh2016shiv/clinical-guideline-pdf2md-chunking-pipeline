@@ -71,7 +71,8 @@ class TaskManager:
         self.batch_config = batch_config
         self.circuit_breaker = circuit_breaker
         self.processor_pool = processor_pool
-        self.processor = None  # Initialize processor attribute
+        self.processor = None  # Initialize processor attribute (deprecated, use processor_config_kwargs)
+        self.processor_config_kwargs = None  # Configuration kwargs for creating processors per task
         
         # Create retry handler from batch configuration
         self.retry_handler = RetryHandler(
@@ -209,12 +210,26 @@ class TaskManager:
                 # Always release processor back to pool
                 await self.processor_pool.release(processor)
         else:
-            # Use injected processor if available, otherwise create new one
-            use_injected_processor = hasattr(self, 'processor') and self.processor is not None
-            processor = self.processor if use_injected_processor else DocumentProcessor()
+            # Priority: Use processor_config_kwargs (creates fresh processor per task)
+            # Fallback: Use injected processor (shared across tasks - deprecated)
+            # Last resort: Create default processor
             
-            # Log processor configuration
-            self.logger.debug(f"Using {'injected' if use_injected_processor else 'new'} processor for async task")
+            if hasattr(self, 'processor_config_kwargs') and self.processor_config_kwargs is not None:
+                # Create a fresh processor for this task with its own config and timestamp
+                from ..models.config import DocumentProcessingConfig
+                processor = DocumentProcessor(DocumentProcessingConfig(**self.processor_config_kwargs))
+                use_fresh_processor = True
+                self.logger.debug(f"Created fresh processor for async task with config kwargs")
+            elif hasattr(self, 'processor') and self.processor is not None:
+                # Use injected processor (deprecated approach - shared across tasks)
+                processor = self.processor
+                use_fresh_processor = False
+                self.logger.debug(f"Using injected processor for async task (deprecated)")
+            else:
+                # Create default processor
+                processor = DocumentProcessor()
+                use_fresh_processor = True
+                self.logger.debug(f"Created default processor for async task")
             
             try:
                 # Create a wrapper function to handle keyword arguments properly
@@ -229,8 +244,8 @@ class TaskManager:
                 result = await loop.run_in_executor(None, process_doc_wrapper)
                 return result
             finally:
-                # Only cleanup processor if we created it (not injected)
-                if not use_injected_processor:
+                # Cleanup processor if we created a fresh one
+                if use_fresh_processor:
                     processor.shutdown()
     
     def process_task_sync(self, task: ProcessingTask) -> ProcessingTask:
@@ -251,12 +266,26 @@ class TaskManager:
         
         task.started_at = time.time()
         
-        # Use injected processor if available, otherwise create new one
-        use_injected_processor = hasattr(self, 'processor') and self.processor is not None
-        processor = self.processor if use_injected_processor else DocumentProcessor()
+        # Priority: Use processor_config_kwargs (creates fresh processor per task)
+        # Fallback: Use injected processor (shared across tasks - deprecated)
+        # Last resort: Create default processor
         
-        # Log processor configuration
-        self.logger.info(f"Using {'injected' if use_injected_processor else 'new'} processor for sync task")
+        if hasattr(self, 'processor_config_kwargs') and self.processor_config_kwargs is not None:
+            # Create a fresh processor for this task with its own config and timestamp
+            from ..models.config import DocumentProcessingConfig
+            processor = DocumentProcessor(DocumentProcessingConfig(**self.processor_config_kwargs))
+            use_fresh_processor = True
+            self.logger.info(f"Created fresh processor for sync task with config kwargs")
+        elif hasattr(self, 'processor') and self.processor is not None:
+            # Use injected processor (deprecated approach - shared across tasks)
+            processor = self.processor
+            use_fresh_processor = False
+            self.logger.info(f"Using injected processor for sync task (deprecated)")
+        else:
+            # Create default processor
+            processor = DocumentProcessor()
+            use_fresh_processor = True
+            self.logger.info(f"Created default processor for sync task")
         
         try:
             # Attempt processing with retries
@@ -300,8 +329,8 @@ class TaskManager:
             
             return task
         finally:
-            # Only shutdown processor if we created it (not injected)
-            if not use_injected_processor:
+            # Cleanup processor if we created a fresh one
+            if use_fresh_processor:
                 processor.shutdown()
 
 

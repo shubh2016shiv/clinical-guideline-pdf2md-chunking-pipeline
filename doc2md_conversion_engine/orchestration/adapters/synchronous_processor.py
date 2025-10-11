@@ -173,7 +173,9 @@ def convert_pdf_batch_to_markdown(
         ...     if not result['success']:
         ...         print(f"Failed: {result['pdf_path']}: {result['error']}")
     """
-    # Create the specific DocumentProcessingConfig for this batch
+    # Create DocumentProcessingConfig kwargs for batch processing
+    # These will be used to create a fresh processor instance for EACH task
+    # This ensures each PDF gets its own config with its own unique timestamp
     doc_proc_kwargs = {
         'enable_gemini': enable_gemini,
         'extract_tables': True,  # Explicitly enable table extraction
@@ -186,9 +188,6 @@ def convert_pdf_batch_to_markdown(
     if output_path:
         doc_proc_kwargs['output_dir'] = output_path
 
-    processing_config = DocumentProcessingConfig(**doc_proc_kwargs)
-    processor = DocumentProcessor(processing_config)
-
     # Create BatchConfiguration with the remaining options
     config = BatchConfiguration(
         max_concurrent_tasks=max_concurrent,
@@ -199,10 +198,11 @@ def convert_pdf_batch_to_markdown(
     
     # Create orchestration client and process documents
     with OrchestrationClient(batch_config=config) as client:
-        # Inject the configured processor into the client's task manager
+        # Inject processor config kwargs into the task manager
+        # This allows each task to create its own processor with a fresh timestamp
         if hasattr(client, 'task_manager'):
-            client.task_manager.processor = processor
-            logger.info(f"Injected configured processor for batch processing (Gemini enabled={processing_config.enable_gemini})")
+            client.task_manager.processor_config_kwargs = doc_proc_kwargs
+            logger.info(f"Configured task manager for batch processing (Gemini enabled={enable_gemini}, fresh processor per task)")
 
         tasks = client.orchestrate_document_batch(
             pdf_paths=pdf_paths,
