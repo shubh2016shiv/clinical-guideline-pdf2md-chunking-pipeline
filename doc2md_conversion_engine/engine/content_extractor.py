@@ -4,6 +4,7 @@
 import logging
 import os
 import uuid
+import warnings
 from bisect import bisect_right
 from io import StringIO
 from pathlib import Path
@@ -65,6 +66,9 @@ class ContentExtractor:
         self.config = config
         self.logger = logging.getLogger(f"doc2md_conversion_engine.engine.{self.__class__.__name__}")
         self._progress_manager = ProgressManager(config.enable_progress)
+        
+        # Suppress PyTorch pin_memory warning when no GPU is available
+        warnings.filterwarnings("ignore", message=".*pin_memory.*", category=UserWarning, module="torch.utils.data.dataloader")
         
         # Initialize Docling converter
         self._docling_converter = self._initialize_docling()
