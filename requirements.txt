@@ -23,6 +23,7 @@ streamlit==1.36.0
 # Utilities
 # General-purpose utility libraries.
 tqdm==4.66.4
+pathvalidate>=3.0.0
 
 # -----------------------------------------------------------------------------
 # --                         Development & Testing                           --

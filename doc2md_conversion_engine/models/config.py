@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
 from pathlib import Path
 from datetime import datetime
+from pathvalidate import sanitize_filename
 
 from ..exceptions import ConfigurationError, MissingConfigurationError, InvalidConfigurationError
 
@@ -140,16 +141,18 @@ class DocumentProcessingConfig:
     
     def get_output_path(self, pdf_stem: str, subdir: Optional[str] = None) -> str:
         """
-        Get output path for a specific PDF.
+        Get output path for a specific PDF with sanitized stem name.
         
         Args:
             pdf_stem: PDF filename without extension
             subdir: Optional subdirectory
             
         Returns:
-            Full output path
+            Full output path with sanitized PDF stem
         """
-        base_path = Path(self.output_dir) / pdf_stem
+        # Sanitize the PDF stem to ensure it's safe for directory creation
+        safe_pdf_stem = self.sanitize_path_component(pdf_stem)
+        base_path = Path(self.output_dir) / safe_pdf_stem
         
         # Add timestamp directory if enabled
         if self.enable_datetime_subdir and self._timestamp:
@@ -158,6 +161,18 @@ class DocumentProcessingConfig:
         if subdir:
             return str(base_path / subdir)
         return str(base_path)
+    
+    def sanitize_path_component(self, component: str) -> str:
+        """
+        Sanitize a path component to ensure it's safe for directory creation.
+        
+        Args:
+            component: Path component string to sanitize
+            
+        Returns:
+            Sanitized path component string
+        """
+        return sanitize_filename(component)
     
     def get_timestamp(self) -> Optional[str]:
         """
