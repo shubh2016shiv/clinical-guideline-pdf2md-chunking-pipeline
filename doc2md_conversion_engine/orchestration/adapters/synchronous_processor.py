@@ -132,6 +132,8 @@ def convert_pdf_batch_to_markdown(
     max_concurrent: int = 5,
     max_retries: int = 3,
     show_progress: bool = True,
+    gemini_api_key: Optional[str] = None,
+    enable_gemini: bool = False,
     **config_options
 ) -> List[Dict[str, Any]]:
     """
@@ -171,16 +173,35 @@ def convert_pdf_batch_to_markdown(
         ...     if not result['success']:
         ...         print(f"Failed: {result['pdf_path']}: {result['error']}")
     """
-    # Create configuration
+    # Create the specific DocumentProcessingConfig for this batch
+    doc_proc_kwargs = {
+        'enable_gemini': enable_gemini,
+    }
+    if gemini_api_key:
+        doc_proc_kwargs['gemini_api_key'] = gemini_api_key
+
+    # If an output path is provided, add it to the doc processing config
+    if output_path:
+        doc_proc_kwargs['output_dir'] = output_path
+
+    processing_config = DocumentProcessingConfig(**doc_proc_kwargs)
+    processor = DocumentProcessor(processing_config)
+
+    # Create BatchConfiguration with the remaining options
     config = BatchConfiguration(
         max_concurrent_tasks=max_concurrent,
         max_retries_per_task=max_retries,
         enable_progress_reporting=show_progress,
-        **config_options
+        **config_options  # Pass the rest of the options here
     )
     
     # Create orchestration client and process documents
     with OrchestrationClient(batch_config=config) as client:
+        # Inject the configured processor into the client's task manager
+        if hasattr(client, 'task_manager'):
+            client.task_manager.processor = processor
+            logger.info(f"Injected configured processor for batch processing (Gemini enabled={processing_config.enable_gemini})")
+
         tasks = client.orchestrate_document_batch(
             pdf_paths=pdf_paths,
             output_path=output_path,

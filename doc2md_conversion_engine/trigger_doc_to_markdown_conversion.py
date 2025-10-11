@@ -172,7 +172,9 @@ def start_batch_doc_processing(
     output_directory: Optional[str] = None,
     max_concurrent_tasks: int = 5,
     max_retry_attempts: int = 3,
-    show_progress_bar: bool = True
+    show_progress_bar: bool = True,
+    gemini_api_key: Optional[str] = None,
+    enable_gemini: bool = False
 ) -> Dict[str, Any]:
     """
     Process multiple PDF documents as a batch with progress tracking.
@@ -187,6 +189,8 @@ def start_batch_doc_processing(
         max_concurrent_tasks: Maximum documents to process simultaneously
         max_retry_attempts: Maximum retry attempts per document
         show_progress_bar: Whether to display progress bar during processing
+        gemini_api_key: Google Gemini API key for figure summarization (optional)
+        enable_gemini: Whether to enable Gemini AI for figure summarization (default: False)
     
     Returns:
         Dictionary containing:
@@ -222,13 +226,15 @@ def start_batch_doc_processing(
     # Track batch processing start time
     batch_start_time = time.time()
     
-    # Process all documents through orchestration engine
+    # Process all documents through orchestration engine with Gemini config
     processing_results = convert_pdf_batch_to_markdown(
         pdf_paths=pdf_file_paths,
         output_path=output_directory,
         max_concurrent=max_concurrent_tasks,
         max_retries=max_retry_attempts,
-        show_progress=show_progress_bar
+        show_progress=show_progress_bar,
+        gemini_api_key=gemini_api_key,
+        enable_gemini=enable_gemini
     )
     
     # Calculate batch processing duration

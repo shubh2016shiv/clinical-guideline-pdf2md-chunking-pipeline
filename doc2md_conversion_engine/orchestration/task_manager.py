@@ -217,14 +217,16 @@ class TaskManager:
             self.logger.debug(f"Using {'injected' if use_injected_processor else 'new'} processor for async task")
             
             try:
+                # Create a wrapper function to handle keyword arguments properly
+                def process_doc_wrapper():
+                    return processor.process_document(
+                        pdf_path=task.pdf_path,
+                        output_path=task.output_path,
+                        output_filename=task.output_filename
+                    )
+                
                 loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(
-                    None,
-                    processor.process_document,
-                    task.pdf_path,
-                    task.output_path,
-                    task.output_filename
-                )
+                result = await loop.run_in_executor(None, process_doc_wrapper)
                 return result
             finally:
                 # Only cleanup processor if we created it (not injected)
