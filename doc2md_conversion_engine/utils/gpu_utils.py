@@ -190,7 +190,7 @@ class AcceleratorDetector:
         except Exception as e:
             logger.warning(f"Unexpected error during CUDA detection: {e}")
             return False
-    
+
     def _detect_mps_availability(self) -> bool:
         """
         Detect MPS availability for Apple Silicon.
@@ -221,7 +221,7 @@ class AcceleratorDetector:
         
         Args:
             accelerator_type: Type of accelerator to query
-            
+
         Returns:
             List of DeviceInfo objects for available devices
             
@@ -239,7 +239,7 @@ class AcceleratorDetector:
         
         Args:
             accelerator_type: Type of accelerator to query
-            
+
         Returns:
             List of DeviceInfo objects
             
@@ -351,7 +351,7 @@ class AcceleratorDetector:
     def _get_platform_optimal_accelerator(self) -> str:
         """
         Get the optimal accelerator for the current platform.
-        
+
         Returns:
             Optimal accelerator type for the platform
             
@@ -512,7 +512,7 @@ class AcceleratorDetector:
         
         Args:
             device: Device type string ('cuda', 'mps', or 'cpu')
-            
+
         Returns:
             AcceleratorConfig object with device-specific settings
         """
@@ -603,7 +603,7 @@ class AcceleratorDetector:
             accelerator_type=AcceleratorType.CPU,
             available_devices=1
         )
-    
+
     def get_docling_accelerator_config(self) -> Dict[str, Any]:
         """
         Get Docling-specific accelerator configuration.
@@ -619,7 +619,7 @@ class AcceleratorDetector:
         - Configure Docling's PdfPipelineOptions with the correct accelerator
         - Set device-specific parameters (CUDA device ID, MPS settings, etc.)
         - Enable GPU/MPS acceleration for document processing tasks
-        
+
         Returns:
             Dictionary with Docling-compatible accelerator settings containing:
             - accelerator: Type of accelerator ('cuda', 'mps', 'cpu')
