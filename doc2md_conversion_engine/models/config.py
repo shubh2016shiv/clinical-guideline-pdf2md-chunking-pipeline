@@ -2,6 +2,7 @@
 """Configuration model for the guideline processor module."""
 
 import os
+import logging
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
 from pathlib import Path
@@ -9,6 +10,8 @@ from datetime import datetime
 from pathvalidate import sanitize_filename
 
 from ..exceptions import ConfigurationError, MissingConfigurationError, InvalidConfigurationError
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -52,7 +55,17 @@ class DocumentProcessingConfig:
         float(os.getenv("DOCLING_IMAGES_SCALE", "2.0")))
     docling_generate_pictures: bool = field(default_factory=lambda: 
         os.getenv("DOCLING_GENERATE_PICTURES", "true").lower() == "true")
-    
+
+    # Hardware Acceleration Configuration
+    enable_gpu_acceleration: bool = field(default_factory=lambda:
+        os.getenv("ENABLE_GPU_ACCELERATION", "true").lower() == "true")
+    force_cpu: bool = field(default_factory=lambda:
+        os.getenv("FORCE_CPU", "false").lower() == "true")
+    preferred_device: str = field(default_factory=lambda:
+        os.getenv("PREFERRED_DEVICE", "auto"))
+    cuda_device_id: int = field(default_factory=lambda:
+        int(os.getenv("CUDA_DEVICE_ID", "0")))
+
     # OCR Configuration
     ocr_lang: str = field(default_factory=lambda: 
         os.getenv("OCR_LANG", "eng"))
@@ -174,14 +187,126 @@ class DocumentProcessingConfig:
         """
         return sanitize_filename(component)
     
-    def get_timestamp(self) -> Optional[str]:
+    def get_device_config(self) -> Dict[str, Any]:
         """
-        Get the current timestamp for directory naming.
+        Get the device configuration for hardware acceleration.
+        
+        This method is the CENTRAL HUB for Docling accelerator integration. It:
+        
+        1. Determines the optimal accelerator (CUDA/MPS/CPU) for Docling
+        2. Returns configuration that ContentExtractor uses to configure Docling
+        3. Implements intelligent fallback strategies for robust operation
+        4. Ensures Docling gets the best available hardware acceleration
+        
+        The returned configuration is used by ContentExtractor._initialize_docling()
+        to configure Docling's PdfPipelineOptions with the selected accelerator.
         
         Returns:
-            Current timestamp string or None if datetime subdirectories are disabled
+            Dictionary with device configuration including:
+            - accelerator: Type of accelerator ('cuda', 'mps', 'cpu')
+            - device: Device string for PyTorch ('cuda:0', 'mps', 'cpu')
+            - device_id: Numeric device identifier
+            
+        Note:
+            Priority system designed for optimal Docling performance:
+            1. Force CPU > 2. Disable GPU > 3. Explicit preference > 4. Auto-detect
         """
-        return self._timestamp
+        from ..utils.gpu_utils import get_accelerator_detector
+        from ..models.accelerator import AcceleratorType
+        
+        # ========================================================================
+        # PRIORITY 1: EXPLICIT CPU FORCING FOR DOCLING
+        # ========================================================================
+        # If CPU is explicitly forced, return CPU config for Docling immediately
+        # This allows users to force CPU-only processing in Docling for debugging
+        if self.force_cpu:
+            logger.debug("CPU usage forced via force_cpu flag - Docling will use CPU")
+            return {"device": "cpu", "accelerator": "cpu", "device_id": 0}
+        
+        # ========================================================================
+        # PRIORITY 2: GPU ACCELERATION DISABLED FOR DOCLING
+        # ========================================================================
+        # If GPU acceleration is disabled, force CPU mode for Docling
+        # This ensures Docling doesn't attempt to use GPU when disabled
+        if not self.enable_gpu_acceleration:
+            logger.debug("GPU acceleration disabled via config - Docling will use CPU")
+            return {"device": "cpu", "accelerator": "cpu", "device_id": 0}
+        
+        # ========================================================================
+        # GET ACCELERATOR DETECTOR FOR INTELLIGENT DEVICE SELECTION
+        # ========================================================================
+        # Get our intelligent accelerator detector that will determine the optimal
+        # device for Docling based on platform, availability, and performance
+        accelerator_detector = get_accelerator_detector()
+        
+        # ========================================================================
+        # PRIORITY 3: EXPLICIT DEVICE PREFERENCE FOR DOCLING
+        # ========================================================================
+        # If user explicitly requests a specific device, honor it with fallback
+        if self.preferred_device.lower() in ["cuda", "gpu"]:
+            # User explicitly requested CUDA for Docling
+            available_accelerators = accelerator_detector.detect_available_accelerators()
+            
+            if available_accelerators.get(AcceleratorType.CUDA, False):
+                # CUDA is available - configure Docling to use it
+                logger.info(f"Using explicitly requested CUDA device for Docling: {self.cuda_device_id}")
+                return {
+                    "device": f"cuda:{self.cuda_device_id}",  # PyTorch device string
+                    "accelerator": "cuda",  # Docling accelerator type
+                    "device_id": self.cuda_device_id  # Specific GPU device ID
+                }
+            else:
+                # CUDA requested but not available - fallback to CPU for Docling
+                logger.warning("CUDA requested but not available, falling back to CPU for Docling")
+                return {"device": "cpu", "accelerator": "cpu", "device_id": 0}
+        
+        elif self.preferred_device.lower() == "mps":
+            # User explicitly requested MPS for Docling (Apple Silicon)
+            available_accelerators = accelerator_detector.detect_available_accelerators()
+            
+            if available_accelerators.get(AcceleratorType.MPS, False):
+                # MPS is available - configure Docling to use it
+                logger.info("Using explicitly requested MPS device for Docling")
+                return {
+                    "device": "mps",  # PyTorch device string
+                    "accelerator": "mps",  # Docling accelerator type
+                    "device_id": 0  # MPS typically uses device 0
+                }
+            else:
+                # MPS requested but not available - fallback to CPU for Docling
+                logger.warning("MPS requested but not available, falling back to CPU for Docling")
+                return {"device": "cpu", "accelerator": "cpu", "device_id": 0}
+        
+        # ========================================================================
+        # PRIORITY 4: AUTO-DETECTION MODE FOR OPTIMAL DOCLING PERFORMANCE
+        # ========================================================================
+        # Use our intelligent accelerator detector to automatically select the
+        # optimal device for Docling based on platform and availability
+        # This is the most intelligent approach - it considers:
+        # - Platform preferences (Windows->CUDA, macOS->MPS)
+        # - Hardware availability (GPU detection, driver status)
+        # - Performance characteristics (memory, compute capability)
+        logger.debug("Using auto-detection mode for optimal Docling device selection")
+        return accelerator_detector.get_docling_accelerator_config()
+
+    def is_gpu_acceleration_enabled(self) -> bool:
+        """
+        Check if GPU acceleration is enabled and available.
+
+        Returns:
+            True if GPU acceleration will be used, False otherwise
+        """
+        if self.force_cpu or not self.enable_gpu_acceleration:
+            return False
+
+        from ..utils.gpu_utils import get_gpu_detector
+        detector = get_gpu_detector()
+
+        if self.preferred_device.lower() in ["cuda", "gpu"]:
+            return detector.is_cuda_available()
+
+        # Auto mode - use GPU if available
+        return detector.is_cuda_available() and detector.get_preferred_device() == "cuda"
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
@@ -199,6 +324,10 @@ class DocumentProcessingConfig:
             'show_image_path_in_md': self.show_image_path_in_md,
             'docling_images_scale': self.docling_images_scale,
             'docling_generate_pictures': self.docling_generate_pictures,
+            'enable_gpu_acceleration': self.enable_gpu_acceleration,
+            'force_cpu': self.force_cpu,
+            'preferred_device': self.preferred_device,
+            'cuda_device_id': self.cuda_device_id,
             'ocr_lang': self.ocr_lang,
             'enable_gemini': self.enable_gemini,
             'gemini_model_name': self.gemini_model_name,

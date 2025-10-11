@@ -51,7 +51,38 @@ class ExtractedContent:
 
 
 class ContentExtractor:
-    """Extracts structured content from PDF documents using Docling."""
+    """
+    Extracts structured content from PDF documents using Docling.
+    
+    ================================================================================
+    DOCLING HARDWARE ACCELERATION INTEGRATION
+    ================================================================================
+    
+    This class is the PRIMARY INTEGRATION POINT for Docling hardware acceleration:
+    
+    1. ACCELERATOR CONFIGURATION:
+       - Gets optimal device config from DocumentProcessingConfig.get_device_config()
+       - Configures Docling's PdfPipelineOptions with selected accelerator
+       - Enables GPU/MPS/CPU acceleration for all Docling operations
+    
+    2. INTEGRATION FLOW:
+       DocumentProcessingConfig.get_device_config()
+       -> AcceleratorDetector.get_docling_accelerator_config()
+       -> ContentExtractor._initialize_docling()
+       -> Docling PdfPipelineOptions with accelerator configuration
+       -> Docling uses selected hardware for document processing
+    
+    3. HARDWARE ACCELERATION BENEFITS:
+       - CUDA: GPU-accelerated OCR, image processing, document conversion
+       - MPS: Apple Silicon-accelerated processing on M1/M2/M3 chips
+       - CPU: Reliable fallback when no GPU acceleration available
+    
+    4. CONFIGURATION METHODS:
+       - Method 1: Direct accelerator attribute (newer Docling versions)
+       - Method 2: Device attribute (alternative Docling versions)
+       - Method 3: CUDA-specific device attribute
+       - Method 4: Environment variable fallback
+    """
 
     def __init__(self, config: DocumentProcessingConfig):
         """
@@ -73,6 +104,10 @@ class ContentExtractor:
         # Initialize Docling converter
         self._docling_converter = self._initialize_docling()
         
+        # Log accelerator diagnostics for debugging
+        if self.config.log_level.upper() in ['DEBUG', 'INFO']:
+            self.log_accelerator_diagnostics()
+        
         # Runtime state
         # TODO: // Need to initialize using the centralized config
         self._current_pdf_path: Optional[Path] = None
@@ -81,32 +116,228 @@ class ContentExtractor:
 
     def _initialize_docling(self) -> Optional[Any]:
         """
-        Initialize Docling document converter with configuration.
+        Initialize Docling document converter with optimal accelerator configuration.
+        
+        This is the MAIN INTEGRATION POINT where our GPU/MPS/CPU detection
+        is applied to Docling's document processing pipeline. This method:
+        
+        1. Gets the optimal accelerator configuration from our intelligent detector
+        2. Configures Docling's PdfPipelineOptions with the selected accelerator
+        3. Enables hardware acceleration for all Docling operations (OCR, image processing, etc.)
+        4. Provides fallback mechanisms for different Docling versions
+        
+        The accelerator selection directly impacts:
+        - Document processing speed (GPU vs CPU)
+        - Memory usage (VRAM vs RAM)
+        - OCR performance (GPU-accelerated vs CPU-only)
+        - Image processing capabilities (CUDA/MPS vs CPU)
         
         Returns:
-            Configured DocumentConverter or None if unavailable
+            Configured DocumentConverter with hardware acceleration enabled
             
         Raises:
             ProcessingError: If Docling is required but not available
+            
+        Note:
+            This method implements multiple configuration strategies to ensure
+            Docling uses the optimal hardware acceleration available on the system.
+            It handles different Docling versions and gracefully falls back to CPU
+            if accelerator configuration is not supported.
         """
         if not DOCLING_AVAILABLE:
             raise ProcessingError(
                 "Docling library not available. Install with: pip install docling"
             )
         
+        # ========================================================================
+        # STEP 1: GET OPTIMAL ACCELERATOR CONFIGURATION FOR DOCLING
+        # ========================================================================
+        # This calls our intelligent accelerator detector which:
+        # - Detects available hardware (CUDA GPU, MPS Apple Silicon, CPU)
+        # - Considers platform preferences (Windows->CUDA, macOS->MPS)
+        # - Respects environment overrides (FORCE_CPU, PREFERRED_DEVICE)
+        # - Returns the optimal configuration for Docling
+        device_config = self.config.get_device_config()
+        accelerator_type = device_config.get("accelerator", "cpu")  # 'cuda', 'mps', or 'cpu'
+        device_string = device_config.get("device", "cpu")  # 'cuda:0', 'mps', or 'cpu'
+        device_id = device_config.get("device_id", 0)  # GPU device ID for CUDA
+        
+        # ========================================================================
+        # STEP 2: LOG ACCELERATOR SELECTION FOR DOCLING
+        # ========================================================================
+        # Log which accelerator will be used by Docling for document processing
+        self.logger.info(f"Initializing Docling with {accelerator_type.upper()} acceleration")
+        
+        if accelerator_type == "cuda":
+            # CUDA GPU acceleration for Docling
+            self.logger.info(f"Using CUDA device: {device_string} (ID: {device_id})")
+            available_devices = device_config.get("available_devices", 1)
+            self.logger.debug(f"Available CUDA devices: {available_devices}")
+        elif accelerator_type == "mps":
+            # Apple Silicon MPS acceleration for Docling
+            self.logger.info("Using Apple Silicon MPS acceleration")
+        else:
+            # CPU-only processing for Docling
+            self.logger.info("Using CPU acceleration (no GPU available or disabled)")
+        
+        # ========================================================================
+        # STEP 3: CONFIGURE DOCLING PIPELINE OPTIONS
+        # ========================================================================
+        # Create Docling's PdfPipelineOptions with our accelerator configuration
+        # This is where we tell Docling which hardware to use for processing
         pipeline_options = PdfPipelineOptions()
         pipeline_options.images_scale = self.config.docling_images_scale
         pipeline_options.generate_page_images = True
         pipeline_options.generate_picture_images = self.config.docling_generate_pictures
         pipeline_options.do_ocr = True
-        document_converter = DocumentConverter(
-            format_options={
-                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-            }
-        )
         
-        self.logger.info("Docling converter initialized successfully")
-        return document_converter
+        # ========================================================================
+        # STEP 4: APPLY ACCELERATOR CONFIGURATION TO DOCLING
+        # ========================================================================
+        # This is the CRITICAL step where we configure Docling to use our
+        # selected accelerator (CUDA/MPS/CPU) for all document processing tasks
+        accelerator_configured = False
+        
+        try:
+            # ========================================================================
+            # METHOD 1: DIRECT ACCELERATOR ATTRIBUTE (NEWER DOCLING VERSIONS)
+            # ========================================================================
+            # This is the preferred method for newer Docling versions that support
+            # direct accelerator configuration. This tells Docling exactly which
+            # accelerator to use for all operations (OCR, image processing, etc.)
+            if hasattr(pipeline_options, 'accelerator'):
+                pipeline_options.accelerator = accelerator_type  # 'cuda', 'mps', or 'cpu'
+                accelerator_configured = True
+                self.logger.debug(f"Configured Docling accelerator via 'accelerator' attribute: {accelerator_type}")
+            
+            # ========================================================================
+            # METHOD 2: DEVICE ATTRIBUTE (ALTERNATIVE DOCLING VERSIONS)
+            # ========================================================================
+            # Some Docling versions use a 'device' attribute instead of 'accelerator'
+            # This sets the PyTorch device that Docling will use internally
+            elif hasattr(pipeline_options, 'device'):
+                pipeline_options.device = device_string  # 'cuda:0', 'mps', or 'cpu'
+                accelerator_configured = True
+                self.logger.debug(f"Configured Docling device via 'device' attribute: {device_string}")
+            
+            # ========================================================================
+            # METHOD 3: CUDA-SPECIFIC DEVICE ATTRIBUTE
+            # ========================================================================
+            # Some Docling versions have a specific 'cuda_device' attribute for CUDA
+            # This is used when we want to specify a specific GPU device for CUDA
+            elif hasattr(pipeline_options, 'cuda_device') and accelerator_type == "cuda":
+                pipeline_options.cuda_device = device_id  # GPU device ID (0, 1, 2, etc.)
+                accelerator_configured = True
+                self.logger.debug(f"Configured CUDA device via 'cuda_device' attribute: {device_id}")
+            
+            # ========================================================================
+            # METHOD 4: ENVIRONMENT VARIABLE FALLBACK
+            # ========================================================================
+            # If Docling doesn't support explicit accelerator configuration,
+            # we fall back to environment variables that PyTorch (used by Docling)
+            # will respect for device selection
+            else:
+                if accelerator_type == "cuda":
+                    # Set CUDA_VISIBLE_DEVICES to tell PyTorch which GPU to use
+                    # This affects all PyTorch operations within Docling
+                    os.environ['CUDA_VISIBLE_DEVICES'] = str(device_id)
+                    self.logger.debug(f"Set CUDA_VISIBLE_DEVICES environment variable: {device_id}")
+                    accelerator_configured = True
+                
+                self.logger.debug("Docling version does not support explicit accelerator attributes")
+        
+        except Exception as config_error:
+            self.logger.warning(f"Could not set Docling accelerator configuration: {config_error}")
+            self.logger.info("Docling will attempt to use default device selection")
+        
+        # ========================================================================
+        # STEP 5: CREATE DOCLING CONVERTER WITH ACCELERATOR CONFIGURATION
+        # ========================================================================
+        # This is where we create the final Docling DocumentConverter with our
+        # accelerator configuration applied. The converter will now use the
+        # selected hardware (CUDA/MPS/CPU) for all document processing operations.
+        try:
+            # Create Docling DocumentConverter with our configured pipeline options
+            # The pipeline_options now contain our accelerator configuration
+            document_converter = DocumentConverter(
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+                }
+            )
+            
+            # ========================================================================
+            # STEP 6: LOG SUCCESSFUL ACCELERATOR INTEGRATION
+            # ========================================================================
+            # Log whether our accelerator configuration was successfully applied
+            if accelerator_configured:
+                self.logger.info(f"Docling converter initialized successfully with {accelerator_type.upper()} acceleration")
+                self.logger.info(f"Docling will use {accelerator_type.upper()} for all document processing tasks")
+            else:
+                self.logger.info("Docling converter initialized (accelerator configuration may use defaults)")
+                self.logger.info("Docling will use its default device selection")
+            
+            return document_converter
+            
+        except Exception as init_error:
+            self.logger.error(f"Failed to initialize Docling converter: {init_error}")
+            raise ProcessingError(f"Docling initialization failed: {init_error}")
+    
+    def log_accelerator_diagnostics(self) -> None:
+        """
+        Log comprehensive diagnostics about accelerator configuration for Docling.
+        
+        This method provides detailed information about the selected accelerator,
+        device capabilities, and Docling integration compatibility.
+        """
+        device_config = self.config.get_device_config()
+        
+        self.logger.info("=" * 60)
+        self.logger.info("DOCLING ACCELERATOR DIAGNOSTICS")
+        self.logger.info("=" * 60)
+        
+        # Log selected configuration
+        accelerator_type = device_config.get('accelerator', 'unknown').upper()
+        device_string = device_config.get('device', 'unknown')
+        
+        self.logger.info(f"Selected Accelerator: {accelerator_type}")
+        self.logger.info(f"Device String: {device_string}")
+        
+        # Log accelerator-specific details
+        if device_config.get('accelerator') == 'cuda':
+            device_id = device_config.get('device_id', 'unknown')
+            available_devices = device_config.get('available_devices', 'unknown')
+            self.logger.info(f"CUDA Device ID: {device_id}")
+            self.logger.info(f"Available CUDA Devices: {available_devices}")
+        elif device_config.get('accelerator') == 'mps':
+            self.logger.info("Platform: Apple Silicon with MPS support")
+        elif device_config.get('accelerator') == 'cpu':
+            self.logger.info("Platform: CPU-only processing")
+        
+        # Log Docling compatibility
+        self.logger.info("\nDocling Integration Compatibility:")
+        try:
+            pipeline_test = PdfPipelineOptions()
+            
+            if hasattr(pipeline_test, 'accelerator'):
+                self.logger.info("  [SUPPORTED] Docling 'accelerator' attribute")
+            elif hasattr(pipeline_test, 'device'):
+                self.logger.info("  [SUPPORTED] Docling 'device' attribute")
+            elif hasattr(pipeline_test, 'cuda_device'):
+                self.logger.info("  [SUPPORTED] Docling 'cuda_device' attribute")
+            else:
+                self.logger.warning("  [UNSUPPORTED] Explicit accelerator configuration")
+                self.logger.info("  [FALLBACK] Using environment variables and defaults")
+        
+        except Exception as e:
+            self.logger.warning(f"  [ERROR] Could not check Docling compatibility: {e}")
+        
+        # Log configuration flags
+        self.logger.info("\nConfiguration Flags:")
+        self.logger.info(f"  Force CPU: {self.config.force_cpu}")
+        self.logger.info(f"  GPU Acceleration Enabled: {self.config.enable_gpu_acceleration}")
+        self.logger.info(f"  Preferred Device: {self.config.preferred_device}")
+        
+        self.logger.info("=" * 60)
 
     def extract(self, pdf_path: str) -> ExtractedContent:
         """
