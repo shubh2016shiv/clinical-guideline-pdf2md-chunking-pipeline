@@ -176,6 +176,8 @@ def convert_pdf_batch_to_markdown(
     # Create the specific DocumentProcessingConfig for this batch
     doc_proc_kwargs = {
         'enable_gemini': enable_gemini,
+        'extract_tables': True,  # Explicitly enable table extraction
+        'write_table_csv': True  # Explicitly enable writing tables to CSV
     }
     if gemini_api_key:
         doc_proc_kwargs['gemini_api_key'] = gemini_api_key
