@@ -152,11 +152,15 @@ class MarkdownBuilder:
         if output_path:
             base_dir = Path(output_path)
         else:
-            base_dir = Path(self.config.output_dir) / pdf_stem
+            # Use the get_output_path method which handles timestamp subdirectory if enabled
+            base_dir = Path(self.config.get_output_path(pdf_stem))
         
-        # Ensure base directory exists
+        # Add markdown subdirectory
+        markdown_dir = base_dir / self.config.markdown_subdir
+        
+        # Ensure directories exist
         try:
-            base_dir.mkdir(parents=True, exist_ok=True)
+            markdown_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             raise OutputError(f"Failed to create output directory: {str(e)}") from e
         
@@ -167,11 +171,12 @@ class MarkdownBuilder:
             md_filename = "output.md"
         
         # Full markdown path
-        markdown_path = base_dir / md_filename
+        markdown_path = markdown_dir / md_filename
         
         # Return paths dictionary
         result = {
             "base_dir": str(base_dir),
+            "markdown_dir": str(markdown_dir),
             "markdown_path": str(markdown_path),
         }
         

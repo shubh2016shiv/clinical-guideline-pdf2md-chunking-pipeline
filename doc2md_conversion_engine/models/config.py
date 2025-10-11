@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
 from pathlib import Path
+from datetime import datetime
 
 from ..exceptions import ConfigurationError, MissingConfigurationError, InvalidConfigurationError
 
@@ -22,6 +23,12 @@ class DocumentProcessingConfig:
     output_dir: str = field(default_factory=lambda: os.getenv("OUTPUT_DIR", "out"))
     tables_subdir: str = field(default_factory=lambda: os.getenv("TABLES_SUBDIR", "tables"))
     figures_subdir: str = field(default_factory=lambda: os.getenv("FIGURES_SUBDIR", "figures"))
+    markdown_subdir: str = field(default_factory=lambda: os.getenv("MARKDOWN_SUBDIR", "markdown_file"))
+    enable_datetime_subdir: bool = field(default_factory=lambda: 
+        os.getenv("ENABLE_DATETIME_SUBDIR", "true").lower() == "true")
+    
+    # Runtime values - not configurable via environment
+    _timestamp: Optional[str] = None
     
     # Document Processing
     extract_tables: bool = field(default_factory=lambda: 
@@ -83,6 +90,10 @@ class DocumentProcessingConfig:
         """Validate configuration after initialization."""
         self._validate_config()
         self._normalize_paths()
+        
+        # Initialize timestamp if datetime subdirectories are enabled
+        if self.enable_datetime_subdir:
+            self._timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     def _validate_config(self) -> None:
         """Validate configuration values."""
@@ -125,6 +136,7 @@ class DocumentProcessingConfig:
         self.output_dir = str(Path(self.output_dir).resolve())
         self.tables_subdir = str(Path(self.tables_subdir))
         self.figures_subdir = str(Path(self.figures_subdir))
+        self.markdown_subdir = str(Path(self.markdown_subdir))
     
     def get_output_path(self, pdf_stem: str, subdir: Optional[str] = None) -> str:
         """
@@ -138,9 +150,23 @@ class DocumentProcessingConfig:
             Full output path
         """
         base_path = Path(self.output_dir) / pdf_stem
+        
+        # Add timestamp directory if enabled
+        if self.enable_datetime_subdir and self._timestamp:
+            base_path = base_path / self._timestamp
+            
         if subdir:
             return str(base_path / subdir)
         return str(base_path)
+    
+    def get_timestamp(self) -> Optional[str]:
+        """
+        Get the current timestamp for directory naming.
+        
+        Returns:
+            Current timestamp string or None if datetime subdirectories are disabled
+        """
+        return self._timestamp
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
@@ -148,6 +174,8 @@ class DocumentProcessingConfig:
             'output_dir': self.output_dir,
             'tables_subdir': self.tables_subdir,
             'figures_subdir': self.figures_subdir,
+            'markdown_subdir': self.markdown_subdir,
+            'enable_datetime_subdir': self.enable_datetime_subdir,
             'extract_tables': self.extract_tables,
             'write_table_csv': self.write_table_csv,
             'save_figures': self.save_figures,

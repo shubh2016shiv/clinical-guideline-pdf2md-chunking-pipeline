@@ -168,7 +168,9 @@ class ContentExtractor:
             pdf_path: Source PDF file path
         """
         pdf_stem = pdf_path.stem
-        self._current_output_dir = Path(self.config.output_dir) / pdf_stem
+        
+        # Use the get_output_path method which handles timestamp subdirectory if enabled
+        self._current_output_dir = Path(self.config.get_output_path(pdf_stem))
         self._current_output_dir.mkdir(parents=True, exist_ok=True)
         
         if self.config.save_figures:
