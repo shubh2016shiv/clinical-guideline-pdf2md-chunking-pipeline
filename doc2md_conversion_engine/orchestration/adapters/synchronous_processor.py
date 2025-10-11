@@ -86,7 +86,8 @@ def convert_single_pdf_to_markdown(
     config_kwargs = {
         'gemini_api_key': gemini_api_key or "GEMINI_API_KEY_HERE",
         'enable_gemini': enable_gemini or True,  # Enable Gemini by default or use provided value
-        'extract_tables': True
+        'extract_tables': True,
+        'write_table_csv': True
     }
     
     # Add output_path to config if provided
