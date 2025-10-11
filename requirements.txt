@@ -16,9 +16,12 @@ Pillow==10.4.0
 pymupdf==1.24.1
 pytesseract==0.3.10
 
-# Hardware Acceleration (Optional - for GPU support)
-# Uncomment the line below if you want GPU acceleration support
-# torch>=2.0.0; sys_platform != "darwin"  # PyTorch with CUDA support (Linux/Windows)
+# Hardware Acceleration
+# PyTorch and Torchvision are installed separately based on your hardware
+# See INSTALLATION.md for instructions on installing the correct PyTorch version
+# for your system (CPU-only, CUDA, or MPS for Apple Silicon)
+torch>=2.0.0  # Base requirement - specific version installed separately
+torchvision>=0.15.0  # Required by Docling for image processing - specific version installed separately
 
 # Web & Application Frameworks
 # Libraries for building the user interface and application server.
