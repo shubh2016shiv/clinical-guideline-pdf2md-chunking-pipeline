@@ -13,6 +13,7 @@ class ConfigurationError(GuidelineProcessorError):
         message: str, 
         config_key: Optional[str] = None,
         config_value: Optional[Any] = None,
+        error_code: Optional[str] = None,
         **kwargs
     ) -> None:
         """
@@ -22,9 +23,10 @@ class ConfigurationError(GuidelineProcessorError):
             message: Error message
             config_key: The configuration key that caused the error
             config_value: The value that caused the error
+            error_code: Error code (defaults to "CONFIG_ERROR")
             **kwargs: Additional context
         """
-        context = kwargs.get('context', {})
+        context = kwargs.pop('context', {})
         if config_key:
             context['config_key'] = config_key
         if config_value is not None:
@@ -32,7 +34,7 @@ class ConfigurationError(GuidelineProcessorError):
             
         super().__init__(
             message=message,
-            error_code="CONFIG_ERROR",
+            error_code=error_code or "CONFIG_ERROR",
             context=context,
             **kwargs
         )
@@ -79,12 +81,49 @@ class InvalidConfigurationError(ConfigurationError):
         message = f"Invalid configuration '{config_key}': {config_value}"
         if expected_type:
             message += f" (expected: {expected_type})"
+        
+        # Create new context dictionary with expected_type
+        context = kwargs.pop('context', {})
+        if expected_type:
+            context['expected_type'] = expected_type
             
         super().__init__(
             message=message,
             config_key=config_key,
             config_value=config_value,
             error_code="INVALID_CONFIG",
-            context={'expected_type': expected_type, **kwargs.get('context', {})},
+            context=context,
+            **kwargs
+        )
+
+
+class APIKeyError(ConfigurationError):
+    """Raised when API key is missing or invalid."""
+    
+    def __init__(
+        self,
+        api_name: str,
+        message: Optional[str] = None,
+        **kwargs
+    ) -> None:
+        """
+        Initialize API key error.
+        
+        Args:
+            api_name: Name of the API (e.g., 'Gemini')
+            message: Custom error message (optional)
+            **kwargs: Additional context
+        """
+        default_message = f"{api_name} API key is missing or invalid"
+        
+        # Create new context dictionary with api_name
+        context = kwargs.pop('context', {})
+        context['api_name'] = api_name
+        
+        super().__init__(
+            message=message or default_message,
+            config_key=f"{api_name.lower()}_api_key",
+            error_code="API_KEY_ERROR",
+            context=context,
             **kwargs
         )

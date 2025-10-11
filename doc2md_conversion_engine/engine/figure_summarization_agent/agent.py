@@ -76,10 +76,13 @@ class AIDocumentAnalyzer:
             return
         
         # Validate API key
+        from doc2md_conversion_engine.exceptions import APIKeyError
+        
         if not self.config.gemini_api_key:
-            raise ConfigurationError(
-                "Gemini API key required when enable_gemini=True. "
-                "Set GEMINI_API_KEY environment variable or provide in config."
+            raise APIKeyError(
+                api_name="Gemini",
+                message="Gemini API key required when enable_gemini=True. "
+                       "Set GEMINI_API_KEY environment variable or provide in config."
             )
         
         try:
@@ -353,18 +356,38 @@ class AIDocumentAnalyzer:
                 
             except Exception as e:
                 last_error = e
+                error_message = str(e)
+                
+                # Check for API key errors
+                if "API key not valid" in error_message or "API_KEY_INVALID" in error_message:
+                    from doc2md_conversion_engine.exceptions import APIKeyError
+                    self.logger.error("Invalid Gemini API key detected")
+                    raise APIKeyError(
+                        api_name="Gemini",
+                        message="Gemini API key is invalid. Please check your API key and try again."
+                    )
+                
                 if attempt < max_retries - 1:
                     wait_time = (2 ** attempt) * 1  # Exponential backoff: 1s, 2s, 4s
                     self.logger.warning(
                         f"Gemini API attempt {attempt + 1} failed, "
-                        f"retrying in {wait_time}s: {str(e)}"
+                        f"retrying in {wait_time}s: {error_message}"
                     )
                     time.sleep(wait_time)
                 else:
-                    self.logger.error(f"All Gemini API retries exhausted: {str(e)}")
+                    self.logger.error(f"All Gemini API retries exhausted: {error_message}")
         
+        # Wrap the ProcessingError with more context
+        from doc2md_conversion_engine.exceptions import ProcessingError, APIKeyError
+        
+        # Check if it's an API key error
+        if isinstance(last_error, APIKeyError):
+            raise last_error
+        
+        # Otherwise raise processing error
         raise ProcessingError(
-            f"Gemini API failed after {max_retries} attempts: {str(last_error)}"
+            f"Gemini API failed after {max_retries} attempts: {str(last_error)}",
+            context={'max_retries': max_retries, 'last_error_type': type(last_error).__name__}
         )
 
     def _extract_gemini_response(self, response: Any) -> str:

@@ -74,7 +74,7 @@ class DocumentProcessingConfig:
     enable_gemini: bool = field(default_factory=lambda: 
         os.getenv("ENABLE_GEMINI", "false").lower() == "true")
     gemini_api_key: Optional[str] = field(default_factory=lambda: 
-        os.getenv("GEMINI_API_KEY"))
+        os.getenv("GEMINI_API_KEY", "<GEMINI_API_KEY>")) # GEMINI API KEY HERE
     gemini_model_name: str = field(default_factory=lambda: 
         os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash"))
     
@@ -142,8 +142,14 @@ class DocumentProcessingConfig:
             )
         
         # Validate Gemini configuration
-        if self.enable_gemini and not self.gemini_api_key:
-            raise MissingConfigurationError("gemini_api_key")
+        if self.enable_gemini:
+            if not self.gemini_api_key or self.gemini_api_key.strip() == "":
+                from ..exceptions import APIKeyError
+                raise APIKeyError(
+                    api_name="Gemini",
+                    message="Gemini API key is required when enable_gemini=True. "
+                           "Set GEMINI_API_KEY environment variable or pass gemini_api_key parameter."
+                )
     
     def _normalize_paths(self) -> None:
         """Normalize and validate file paths."""

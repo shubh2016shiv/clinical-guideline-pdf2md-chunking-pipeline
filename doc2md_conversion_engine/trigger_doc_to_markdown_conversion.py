@@ -141,6 +141,14 @@ def start_single_doc_processing(
         # Calculate processing duration even on failure
         processing_duration = time.time() - start_time
         
+        # Extract clean error message for user-facing output
+        if hasattr(error, 'message'):
+            # For our custom exceptions, use the clean message
+            clean_error_message = error.message
+        else:
+            # For other exceptions, use the string representation
+            clean_error_message = str(error)
+        
         # Build failure result dictionary
         result = {
             'request_id': request_id,
@@ -150,12 +158,13 @@ def start_single_doc_processing(
             'figures_extracted': 0,
             'tables_extracted': 0,
             'processing_duration_seconds': round(processing_duration, 2),
-            'error_message': str(error)
+            'error_message': clean_error_message
         }
         
-        logger.error(f"Request {request_id}: Failed - {error}")
+        logger.error(f"Request {request_id}: Failed - {clean_error_message}")
         
-        raise ProcessingError(f"Failed to process document: {error}") from error
+        # Re-raise the original error without wrapping to avoid nested messages
+        raise error
 
 
 def start_batch_doc_processing(

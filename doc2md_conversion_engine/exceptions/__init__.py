@@ -2,7 +2,7 @@
 """Custom exceptions for the guideline processor module."""
 
 from .base import GuidelineProcessorError
-from .config import ConfigurationError, MissingConfigurationError, InvalidConfigurationError
+from .config import ConfigurationError, MissingConfigurationError, InvalidConfigurationError, APIKeyError
 from .processing import ProcessingError, DocumentLoadError, ConversionError, OutputError
 from .validation import ValidationError, FileValidationError, ContentValidationError
 
@@ -11,6 +11,7 @@ __all__ = [
     "ConfigurationError", 
     "MissingConfigurationError",
     "InvalidConfigurationError",
+    "APIKeyError",
     "ProcessingError",
     "DocumentLoadError",
     "ConversionError",

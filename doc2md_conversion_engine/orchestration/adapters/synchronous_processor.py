@@ -81,14 +81,19 @@ def convert_single_pdf_to_markdown(
         ... )
     """
 
-    # Initialize processing configuration with Gemini settings
-    # Pass output_path if provided to ensure correct directory structure
+    # Initialize processing configuration
+    # DocumentProcessingConfig will handle API key resolution internally:
+    # Priority: function parameter > environment variable > config default
     config_kwargs = {
-        'gemini_api_key': gemini_api_key or "GEMINI_API_KEY_HERE",
-        'enable_gemini': enable_gemini or True,  # Enable Gemini by default or use provided value
+        'enable_gemini': enable_gemini,
         'extract_tables': True,
         'write_table_csv': True
     }
+    
+    # Only add API key if explicitly provided as function parameter
+    # Otherwise, let DocumentProcessingConfig handle resolution from environment/default
+    if gemini_api_key is not None:
+        config_kwargs['gemini_api_key'] = gemini_api_key
     
     # Add output_path to config if provided
     if output_path:
