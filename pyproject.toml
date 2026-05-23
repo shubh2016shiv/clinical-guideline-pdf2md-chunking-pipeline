@@ -90,6 +90,9 @@ dependencies = [
     # Retry with exponential backoff + jitter
     "stamina>=26.1.0",
 
+    # Observability — Prometheus-style counters, gauges, and histograms
+    "prometheus-client>=0.21.0",
+
     # Timeout: asyncio.timeout() from stdlib (Python 3.11+) — no extra dep needed
 
     # NVIDIA Management Library — read-only VRAM queries (GPUVRAMUsageMonitor)

@@ -59,6 +59,20 @@ pdfplumber>=0.11.0
 nvidia-ml-py>=12.0.0
 
 # -----------------------------------------------------------------------------
+# --                    Fault Tolerance & Observability                     --
+# -----------------------------------------------------------------------------
+
+# Circuit breaker — asyncio-native protected-call state management
+aiobreaker>=1.2.0
+
+# Configuration — reads settings.yaml + env var overrides with validation
+pydantic-settings[yaml]>=2.7.0
+
+# Retry with exponential backoff + jitter
+stamina>=26.1.0
+
+# Prometheus-style counters, gauges, and histograms
+prometheus-client>=0.21.0
 
 # -----------------------------------------------------------------------------
 # --                         Development & Testing                           --
