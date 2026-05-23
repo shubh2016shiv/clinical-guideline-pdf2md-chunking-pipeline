@@ -76,6 +76,24 @@ dependencies = [
     "pymupdf>=1.24.0",
     "pdfplumber>=0.11.0",
 
+    # ------------------------------------------------------------------------
+    # Fault Tolerance
+    # ------------------------------------------------------------------------
+
+    # Circuit breaker — asyncio-native, pure Python (works on 3.12+ despite no explicit claim)
+    # No actively maintained alternative exists as of 2026; this is the established choice
+    "aiobreaker>=1.2.0",
+
+    # Configuration management — reads settings.yaml + env var overrides with full validation
+    # [yaml] extra installs pyyaml for YamlConfigSettingsSource
+    "pydantic-settings[yaml]>=2.7.0",
+
+    # Retry with exponential backoff + jitter — async-first, Prometheus built-in
+    # Preferred over tenacity for 100% async codebases
+    "stamina>=26.1.0",
+
+    # Timeout: asyncio.timeout() from stdlib (Python 3.11+) — no extra dep needed
+
     # Former direct deps now pulled transitively by Docling/MinerU:
     #   pytesseract  → replaced by RapidOCR (Docling) / PaddleOCR (MinerU)
 ]
