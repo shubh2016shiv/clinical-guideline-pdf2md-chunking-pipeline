@@ -216,8 +216,8 @@ class GPUConfig(BaseModel):
         default=5500,
         ge=1024,
         description=(
-            "Hard VRAM ceiling in megabytes.  The pipeline refuses to start an "
-            "engine that would exceed this budget, preventing out-of-memory crashes."
+            "Hard VRAM ceiling in megabytes for callers that enforce a preflight "
+            "GPU budget check before starting an engine."
         ),
     )
 

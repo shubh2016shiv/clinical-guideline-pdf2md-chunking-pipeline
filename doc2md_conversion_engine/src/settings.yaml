@@ -74,7 +74,7 @@ gpu:
   enabled: true
   force_cpu: false
   cuda_device_id: 0                 # ignored if force_cpu: true
-  max_vram_mb: 5500                 # hard ceiling; pipeline refuses to start if exceeded
+  max_vram_mb: 5500                 # preflight ceiling for GPU engine startup
 
 
 # -----------------------------------------------------------------------------
@@ -119,15 +119,15 @@ fault_tolerance:
   # Docs: https://aiobreaker.readthedocs.io/en/latest/
   circuit_breaker:
     fail_max: 3                     # failures within the time window before circuit opens
-    timeout_duration_seconds: 60    # OPEN → HALF-OPEN probe delay (maps to timedelta)
+    timeout_duration_seconds: 60    # OPEN -> HALF-OPEN probe delay (maps to timedelta)
     # Exceptions that do NOT count as failures (expected/non-fault errors)
     exclude_exceptions:
       - asyncio.CancelledError
 
-  # stamina retry config — applies to engine calls and LLM API calls
+  # stamina retry config for callers that opt into the retry policy
   # Docs: https://stamina.hynek.me/en/stable/api.html
   retry:
-    attempts: 3                     # max retry attempts (not counting the first call)
+    attempts: 3                     # total attempts, including the first call
     timeout_seconds: 90.0           # total time budget across all attempts (stamina: timeout=)
     wait_initial_seconds: 1.0       # delay before first retry (stamina: wait_initial=)
     wait_max_seconds: 30.0          # backoff ceiling (stamina: wait_max=)

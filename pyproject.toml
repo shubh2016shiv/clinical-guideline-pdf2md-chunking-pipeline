@@ -80,19 +80,21 @@ dependencies = [
     # Fault Tolerance
     # ------------------------------------------------------------------------
 
-    # Circuit breaker — asyncio-native, pure Python (works on 3.12+ despite no explicit claim)
-    # No actively maintained alternative exists as of 2026; this is the established choice
+    # Circuit breaker — asyncio-native protected-call state management
     "aiobreaker>=1.2.0",
 
     # Configuration management — reads settings.yaml + env var overrides with full validation
     # [yaml] extra installs pyyaml for YamlConfigSettingsSource
     "pydantic-settings[yaml]>=2.7.0",
 
-    # Retry with exponential backoff + jitter — async-first, Prometheus built-in
-    # Preferred over tenacity for 100% async codebases
+    # Retry with exponential backoff + jitter
     "stamina>=26.1.0",
 
     # Timeout: asyncio.timeout() from stdlib (Python 3.11+) — no extra dep needed
+
+    # NVIDIA Management Library — read-only VRAM queries (GPUVRAMUsageMonitor)
+    # Provides the ``pynvml`` import.  Degrades gracefully when not installed.
+    "nvidia-ml-py>=12.0.0",
 
     # Former direct deps now pulled transitively by Docling/MinerU:
     #   pytesseract  → replaced by RapidOCR (Docling) / PaddleOCR (MinerU)
@@ -126,7 +128,14 @@ packages = [
 # ---------------------------------------------------------------------------
 
 [dependency-groups]
-dev = []
+dev = [
+    # Linting & Formatting
+    "ruff>=0.11.0",
+    # Type Checking
+    "pyright>=1.1.400",
+    # Testing
+    "pytest>=8.3.0",
+]
 
 # PyTorch CUDA 12.4 wheels for GPU acceleration (torch>=2.6.0)
 #   GPU default: CUDA 12.4 — auto-detects GPU at runtime, falls back to CPU if none found

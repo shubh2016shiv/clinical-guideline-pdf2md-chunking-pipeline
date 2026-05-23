@@ -136,10 +136,7 @@ class GPUError(PipelineError):
 class GPUNotAvailableError(GPUError):
     """
     Raised when GPU acceleration is required but either no CUDA device is
-    detected or the available VRAM is below ``gpu.max_vram_mb``.
-
-    When ``engine_routing.conversion_engine`` is ``auto`` the pipeline
-    catches this and retries with the CPU backend instead of crashing.
+    enabled, CPU mode is forced, or the device cannot be used safely.
     """
 
 
