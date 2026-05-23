@@ -7,42 +7,64 @@
 google-generativeai==0.5.4
 tiktoken==0.7.0
 
-# Document & Data Processing
-# Libraries for parsing, extracting, and manipulating data from documents.
-docling==0.1.1
-pandas==2.2.2
-pdfplumber==0.11.1
-Pillow==10.4.0
-pymupdf==1.24.1
-pytesseract==0.3.10
+# -----------------------------------------------------------------------------
+# Document Conversion Engines (GPU-first with automatic CPU fallback)
+# -----------------------------------------------------------------------------
 
-# Hardware Acceleration
-# PyTorch and Torchvision are installed separately based on your hardware
-# See INSTALLATION.md for instructions on installing the correct PyTorch version
-# for your system (CPU-only, CUDA, or MPS for Apple Silicon)
-torch>=2.0.0  # Base requirement - specific version installed separately
-torchvision>=0.15.0  # Required by Docling for image processing - specific version installed separately
+# Docling v2 — primary engine (MIT license, IBM Research)
+#   GPU: CUDA/MPS auto-detected via AcceleratorDetector → PdfPipelineOptions
+#   CPU: Automatic fallback when no GPU detected or force_cpu=True
+docling>=2.95.0
+
+# MinerU v3 — secondary engine for complex diagrams (Apache 2.0-based)
+#   GPU: VLM engine (MinerU2.5-Pro-1.2B) via vLLM/LMDeploy/MLX
+#   CPU: pipeline backend (86.2 OmniDocBench score, no GPU required)
+mineru[core]>=3.1.0
+
+# -----------------------------------------------------------------------------
+# Shared Runtime Dependencies (bumped for Docling v2 + MinerU v3 compat)
+# -----------------------------------------------------------------------------
+
+# PyTorch ecosystem — GPU-first (CUDA/MPS), CPU fallback built-in
+# NOTE: Install with --index-url https://download.pytorch.org/whl/cu124 for CUDA 12.4
+#       Omit --index-url for CPU-only wheels (pip default)
+#       PyTorch auto-detects GPU at runtime and falls back to CPU transparently
+torch>=2.6.0,<3.0.0
+torchvision>=0.21.0,<1.0.0
+
+# Image processing — MinerU floor is 11.0.0
+Pillow>=11.0.0,<13.0.0
+
+# Data processing — MinerU floor is 2.3.3
+pandas>=2.3.3,<4.0.0
 
 # Web & Application Frameworks
 # Libraries for building the user interface and application server.
-streamlit==1.36.0
+streamlit>=1.41.0
 
 # Utilities
 # General-purpose utility libraries.
-tqdm==4.66.4
+tqdm>=4.66.4
 pathvalidate>=3.0.0
 psutil>=5.9.0
+
+# -----------------------------------------------------------------------------
+# Optional — used by existing image/table extraction fallbacks (guarded imports)
+pymupdf>=1.24.0
+pdfplumber>=0.11.0
+
+# NOTE: pytesseract removed — replaced by RapidOCR (Docling) / PaddleOCR (MinerU)
+# -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
 # --                         Development & Testing                           --
 # -----------------------------------------------------------------------------
 
-# Code Quality & Formatting
-# Tools for linting, formatting, and static analysis to ensure code quality.
-black==24.4.2
-flake8==7.1.0
-mypy==1.10.0
+# Linting & Formatting
+ruff>=0.11.0
+
+# Type Checking
+pyright>=1.1.400
 
 # Testing Frameworks
-# Libraries for writing and running automated tests.
-pytest==8.2.2
+pytest>=8.3.0
