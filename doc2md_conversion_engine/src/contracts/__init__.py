@@ -17,55 +17,11 @@ re-organisations never break callers::
 """
 
 # Domain types
-from .pipeline_domain_types import (
-    ConversionJob,
-    ConversionSummary,
-    DocumentType,
-    EngineClassification,
-    ExtractionEngine,
-    Figure,
-    MinerUBackend,
-    PageProfile,
-    PageResult,
-    Table,
-)
-
-# Interfaces
-from .conversion_engine_interface import (
-    AbstractConversionEngine,
-)
-from .windowed_checkpoint_store_interface import (
-    AbstractCheckpointStore,
-    CheckpointState,
-    EngineSnapshot,
-    WindowRecord,
-)
-
-# Exceptions
-from .exceptions import (
-    AssemblyError,
-    CheckpointCorruptedError,
-    CheckpointError,
-    ConfigurationError,
-    DocumentError,
-    DocumentTooLargeError,
-    EngineError,
-    EngineFallbackExhaustedError,
-    EngineStartupError,
-    EngineTimeoutError,
-    FigurePoisonPillError,
-    FigureSummarizationError,
-    GPUError,
-    GPUNotAvailableError,
-    PipelineError,
-    TokenResolutionTimeoutError,
-)
-
 # Configuration
 from .configurations.pipeline_config import (
     AssemblyConfig,
-    CircuitBreakerConfig,
     CheckpointingConfig,
+    CircuitBreakerConfig,
     DoclingEngineConfig,
     EngineRoutingConfig,
     FaultToleranceConfig,
@@ -81,6 +37,51 @@ from .configurations.pipeline_config import (
 from .configurations.vision_llm_client_config import (
     VisionLLMClientConfig,
     VisionLLMProvider,
+)
+
+# Interfaces
+from .conversion_engine_interface import (
+    AbstractConversionEngine,
+)
+
+# Exceptions
+from .exceptions import (
+    AssemblyError,
+    CheckpointCorruptedError,
+    CheckpointError,
+    CircuitBreakerOpenError,
+    ConfigurationError,
+    DocumentError,
+    DocumentTooLargeError,
+    EngineError,
+    EngineFallbackExhaustedError,
+    EngineStartupError,
+    EngineTimeoutError,
+    FaultToleranceConfigurationError,
+    FigurePoisonPillError,
+    FigureSummarizationError,
+    GPUError,
+    GPUNotAvailableError,
+    PipelineError,
+    TokenResolutionTimeoutError,
+)
+from .pipeline_domain_types import (
+    ConversionJob,
+    ConversionSummary,
+    DocumentType,
+    EngineClassification,
+    ExtractionEngine,
+    Figure,
+    MinerUBackend,
+    PageProfile,
+    PageResult,
+    Table,
+)
+from .windowed_checkpoint_store_interface import (
+    AbstractCheckpointStore,
+    CheckpointState,
+    EngineSnapshot,
+    WindowRecord,
 )
 
 __all__ = [
@@ -104,11 +105,13 @@ __all__ = [
     # Exceptions
     "PipelineError",
     "ConfigurationError",
+    "FaultToleranceConfigurationError",
     "DocumentError",
     "DocumentTooLargeError",
     "EngineError",
     "EngineStartupError",
     "EngineTimeoutError",
+    "CircuitBreakerOpenError",
     "EngineFallbackExhaustedError",
     "GPUError",
     "GPUNotAvailableError",

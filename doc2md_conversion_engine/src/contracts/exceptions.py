@@ -12,11 +12,13 @@ Hierarchy
 ---------
 PipelineError
 ├── ConfigurationError
+│   └── FaultToleranceConfigurationError
 ├── DocumentError
 │   └── DocumentTooLargeError
 ├── EngineError
 │   ├── EngineStartupError
 │   ├── EngineTimeoutError
+│   ├── CircuitBreakerOpenError
 │   └── EngineFallbackExhaustedError
 ├── GPUError
 │   └── GPUNotAvailableError
@@ -61,6 +63,10 @@ class ConfigurationError(PipelineError):
     """Raised when settings are missing, invalid, or mutually inconsistent."""
 
 
+class FaultToleranceConfigurationError(ConfigurationError):
+    """Raised when fault-tolerance configuration cannot be resolved safely."""
+
+
 # ---------------------------------------------------------------------------
 # Document
 # ---------------------------------------------------------------------------
@@ -101,16 +107,11 @@ class EngineTimeoutError(EngineError):
     """
     Raised when a single windowed extraction batch exceeds
     ``fault_tolerance.timeouts.engine_window_seconds``.
-
-    The circuit breaker (aiobreaker) records this as a failure. After
-    ``fault_tolerance.circuit_breaker.fail_max`` consecutive timeouts it
-    opens the breaker and routes the remaining windows to the fallback engine.
-
-    Jargon — circuit breaker: a resilience pattern borrowed from electrical
-    engineering. When too many failures occur in a row, the breaker "opens"
-    (like tripping a fuse) and stops sending work to the failing component,
-    giving it time to recover before trying again.
     """
+
+
+class CircuitBreakerOpenError(EngineError):
+    """Raised when an explicit circuit-breaker-protected operation is blocked."""
 
 
 class EngineFallbackExhaustedError(EngineError):

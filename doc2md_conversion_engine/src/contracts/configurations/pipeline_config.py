@@ -43,11 +43,10 @@ Section ↔ settings.yaml mapping
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -58,7 +57,6 @@ from pydantic_settings import (
 from .docling_engine_config import DoclingEngineConfig
 from .mineru_engine_config import MinerUEngineConfig
 from .vision_llm_client_config import VisionLLMClientConfig
-from ..pipeline_domain_types import ExtractionEngine, MinerUBackend
 
 # Absolute path to the settings file co-located with this src/ tree.
 _SETTINGS_YAML_PATH = Path(__file__).parent.parent.parent / "settings.yaml"
@@ -71,10 +69,7 @@ _SETTINGS_YAML_PATH = Path(__file__).parent.parent.parent / "settings.yaml"
 # that only PipelineConfig (the root) handles YAML and env-var loading.
 # ---------------------------------------------------------------------------
 
-from pydantic import BaseModel  # noqa: E402  (import after path constant)
-
-
-class ConversionEngineChoice(str, Enum):
+class ConversionEngineChoice(StrEnum):
     """
     How the pipeline selects a conversion engine.
 
@@ -331,19 +326,17 @@ class CircuitBreakerConfig(BaseModel):
     """
     Settings passed to ``aiobreaker.CircuitBreaker``.
 
-    Jargon — circuit breaker: after ``fail_max`` consecutive failures the
-    breaker "opens" (like tripping a fuse) and fast-fails all subsequent
-    calls to the failing engine, routing them to Docling fallback instead.
-    After ``timeout_duration_seconds`` the breaker enters HALF-OPEN and
-    sends one probe request to check if the primary engine has recovered.
+    The breaker only observes operations explicitly executed through the
+    fault-tolerance module. An open breaker blocks those protected calls until
+    ``timeout_duration_seconds`` allows a recovery probe.
     """
 
     fail_max: int = Field(
         default=3,
         ge=1,
         description=(
-            "Consecutive failures before the circuit breaker opens and routes "
-            "work to the fallback engine.  Mapped to ``aiobreaker`` ``fail_max``."
+            "Consecutive protected-call failures before the circuit breaker opens. "
+            "Mapped to ``aiobreaker`` ``fail_max``."
         ),
     )
 
@@ -360,7 +353,8 @@ class CircuitBreakerConfig(BaseModel):
         default_factory=lambda: ["asyncio.CancelledError"],
         description=(
             "Fully-qualified exception class names that should NOT count as "
-            "circuit-breaker failures (e.g. deliberate cancellations)."
+            "circuit-breaker failures. Callable predicates are not supported "
+            "in YAML configuration."
         ),
     )
 
@@ -376,7 +370,7 @@ class RetryConfig(BaseModel):
     attempts: int = Field(
         default=3,
         ge=1,
-        description="Maximum retry attempts (not counting the initial call).",
+        description="Total attempts, including the initial call. Maps to ``stamina`` ``attempts``.",
     )
 
     timeout_seconds: float = Field(
@@ -476,7 +470,7 @@ class AssemblyConfig(BaseModel):
     )
 
 
-class LogLevel(str, Enum):
+class LogLevel(StrEnum):
     DEBUG = "DEBUG"
     INFO = "INFO"
     WARNING = "WARNING"
