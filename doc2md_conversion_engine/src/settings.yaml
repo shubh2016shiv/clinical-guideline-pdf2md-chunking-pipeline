@@ -5,6 +5,27 @@
 
 
 # -----------------------------------------------------------------------------
+# Storage
+# Filesystem root for all per-job workspaces.
+# Read by: contracts/pipeline_config.py → file_upload_management
+# Each conversion job gets:  doc_assets/<sha256_job_id>/output/
+# -----------------------------------------------------------------------------
+storage:
+  doc_assets_dir: "doc_assets"      # relative to process cwd, or use an absolute path
+
+
+# -----------------------------------------------------------------------------
+# Document Constraints
+# Enforced by Stage 1 (document_sha256_hasher, document_page_structure_scanner)
+# before any GPU, model loading, or external API is touched.
+# Read by: contracts/pipeline_config.py → stage1_document_prescanning
+# -----------------------------------------------------------------------------
+document_constraints:
+  max_file_size_bytes: 209715200    # 200 MB — reject oversized files at the hasher
+  max_pages: 500                    # reject documents with more pages than this
+
+
+# -----------------------------------------------------------------------------
 # Engine Routing
 # Controls which conversion engine is selected and how complexity is scored.
 # Read by: contracts/pipeline_config.py → stage1_document_prescanning

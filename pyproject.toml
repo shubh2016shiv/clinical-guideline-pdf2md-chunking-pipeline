@@ -103,6 +103,9 @@ dependencies = [
     #   pytesseract  → replaced by RapidOCR (Docling) / PaddleOCR (MinerU)
 ]
 
+[project.scripts]
+stage1-prescan = "doc2md_conversion_engine.src.entrypoints.convert_document_to_markdown_cli:main"
+
 # ---------------------------------------------------------------------------
 # Optional Dependency Groups
 # ---------------------------------------------------------------------------

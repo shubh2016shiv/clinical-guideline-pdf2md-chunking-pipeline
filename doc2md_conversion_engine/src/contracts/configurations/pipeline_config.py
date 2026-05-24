@@ -29,6 +29,8 @@ Usage
 
 Section ↔ settings.yaml mapping
 ---------------------------------
+``storage``             →  storage.*
+``document_constraints``→  document_constraints.*
 ``engine_routing``      →  engine_routing.*
 ``mineru_engine``       →  mineru_engine.*
 ``docling_engine``      →  docling_engine.*
@@ -68,6 +70,62 @@ _SETTINGS_YAML_PATH = Path(__file__).parent.parent.parent / "settings.yaml"
 # These are nested under PipelineConfig.  We use plain BaseModel here so
 # that only PipelineConfig (the root) handles YAML and env-var loading.
 # ---------------------------------------------------------------------------
+
+class DocumentStorageConfig(BaseModel):
+    """
+    File-system locations used by the upload management layer.
+
+    ``doc_assets_dir`` is the single root under which every conversion job
+    gets its own sub-directory named after its SHA-256 job_id::
+
+        doc_assets/
+        └── e3b0c44298fc1c14.../   ← one directory per document
+            ├── output/             ← Stage 2/3/4 write here
+            └── .checkpoints/      ← checkpoint JSON files (via CheckpointingConfig)
+
+    The path is resolved relative to the process working directory unless
+    it is absolute.
+    """
+
+    doc_assets_dir: str = Field(
+        default="doc_assets",
+        description=(
+            "Base directory for all document job workspaces.  "
+            "Each job creates a sub-directory named by its SHA-256 job_id."
+        ),
+    )
+
+
+class DocumentConstraintsConfig(BaseModel):
+    """
+    Hard limits on the source document enforced by Stage 1 before any
+    GPU, CPU-intensive processing, or external API is touched.
+
+    Rejecting an oversized document here is cheap — it happens in the hasher
+    after streaming a few MB at most.  Discovering the same problem at Stage 2
+    would waste minutes of GPU warm-up time.
+    """
+
+    max_file_size_bytes: int = Field(
+        default=209_715_200,  # 200 MB — architecture target ceiling
+        ge=1,
+        description=(
+            "Maximum source document size in bytes.  "
+            "Files larger than this are rejected with DocumentTooLargeError "
+            "before any per-page work begins."
+        ),
+    )
+
+    max_pages: int = Field(
+        default=500,
+        ge=1,
+        description=(
+            "Maximum page count accepted by the structure scanner.  "
+            "Documents exceeding this are rejected with DocumentTooLargeError.  "
+            "For DOCX and HTML the page count is estimated from word count."
+        ),
+    )
+
 
 class ConversionEngineChoice(StrEnum):
     """
@@ -536,6 +594,10 @@ class PipelineConfig(BaseSettings):
     _yaml_file: Path = _SETTINGS_YAML_PATH
 
     # Section configs — each maps to a top-level key in settings.yaml.
+    storage: DocumentStorageConfig = Field(default_factory=DocumentStorageConfig)
+    document_constraints: DocumentConstraintsConfig = Field(
+        default_factory=DocumentConstraintsConfig
+    )
     engine_routing: EngineRoutingConfig = Field(default_factory=EngineRoutingConfig)
     mineru_engine: MinerUEngineConfig = Field(default_factory=MinerUEngineConfig)
     docling_engine: DoclingEngineConfig = Field(default_factory=DoclingEngineConfig)

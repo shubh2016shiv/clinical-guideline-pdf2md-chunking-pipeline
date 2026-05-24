@@ -1,108 +1,25 @@
 #!/usr/bin/env python3
 """
-Document Processing Engine
+doc2md_conversion_engine
+=========================
+Clinical guideline PDF → Markdown conversion pipeline.
 
-A professional document processing system for clinical guidelines, providing
-PDF to Markdown conversion with intelligent structure analysis, figure extraction,
-and comprehensive orchestration capabilities.
-
-Features:
-- PDF processing with structure preservation
-- Figure and table extraction
-- Batch processing with fault tolerance
-- Concurrent document processing
-- Comprehensive error handling
-- Progress tracking and metrics collection
-- Synchronous and asynchronous APIs
-
-Main Components:
-- Orchestration: Task management and batch coordination
-- Engine: Core document processing capabilities
-- Models: Data structures and configuration
-- Exceptions: Error handling
+The active codebase lives under ``src/``.  This top-level package exports
+only the components that entrypoints need for Stage 1 prescanning.
 """
 
 from __future__ import annotations
 
 __version__ = "2.0.0"
-__author__ = "Shubham Singh"
-__description__ = "Document Processing Engine"
 
-# Import exceptions
-from .exceptions import (
-    GuidelineProcessorError,
-    ConfigurationError,
-    ProcessingError,
-    ValidationError
-)
+from .src.contracts.configurations.pipeline_config import PipelineConfig
+from .src.contracts.exceptions import DocumentError, DocumentTooLargeError
+from .src.pipeline_orchestrator import PipelineOrchestrator, Stage1Result
 
-# Import data models
-from .models.config import DocumentProcessingConfig
-from .models.document import DocumentResult, ProcessingMetadata
-
-# Import orchestration components
-from .orchestration import (
-    # Main client
-    OrchestrationClient,
-    
-    # Configuration
-    BatchConfiguration,
-    OrchestrationSettings,
-    
-    # Simple API functions
-    convert_single_pdf_to_markdown,
-    convert_pdf_batch_to_markdown,
-    convert_directory_pdfs_to_markdown,
-    get_default_conversion_settings,
-    
-    # Async API functions
-    convert_single_pdf_to_markdown_async,
-    convert_pdf_batch_to_markdown_async,
-    convert_directory_pdfs_to_markdown_async,
-    convert_concurrent_batches_async,
-    get_default_conversion_settings_async
-)
-
-# Import high-level entry points
-from .trigger_doc_to_markdown_conversion import (
-    start_single_doc_processing,
-    start_batch_doc_processing,
-    start_docs_processing_from_directory
-)
-
-# Public API
 __all__ = [
-    # Core data models
-    "DocumentProcessingConfig",
-    "DocumentResult",
-    "ProcessingMetadata",
-    
-    # Exceptions
-    "GuidelineProcessorError",
-    "ConfigurationError",
-    "ProcessingError",
-    "ValidationError",
-    
-    # Orchestration client
-    "OrchestrationClient",
-    "BatchConfiguration",
-    "OrchestrationSettings",
-    
-    # Simple API functions
-    "convert_single_pdf_to_markdown",
-    "convert_pdf_batch_to_markdown",
-    "convert_directory_pdfs_to_markdown",
-    "get_default_conversion_settings",
-    
-    # Async API functions
-    "convert_single_pdf_to_markdown_async",
-    "convert_pdf_batch_to_markdown_async",
-    "convert_directory_pdfs_to_markdown_async",
-    "convert_concurrent_batches_async",
-    "get_default_conversion_settings_async",
-    
-    # High-level entry points
-    "start_single_doc_processing",
-    "start_batch_doc_processing",
-    "start_docs_processing_from_directory",
+    "PipelineConfig",
+    "PipelineOrchestrator",
+    "Stage1Result",
+    "DocumentError",
+    "DocumentTooLargeError",
 ]
