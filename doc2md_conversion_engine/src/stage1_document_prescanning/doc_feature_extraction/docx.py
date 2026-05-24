@@ -47,7 +47,7 @@ from ...contracts.configurations.pipeline_config import (
     DocxFeatureExtractionConfig,
 )
 from ...contracts.exceptions import DocumentError
-from .capabilities import get_engine_format_support
+from .engine_format_support import get_engine_format_support
 from .models import (
     DocumentFeatureProfile,
     FeatureDocumentType,
