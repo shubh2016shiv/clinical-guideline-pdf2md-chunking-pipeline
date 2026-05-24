@@ -22,10 +22,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 from ...contracts.configurations.pipeline_config import (
     DocumentFeatureExtractionConfig,
+    EngineNeedsEvaluatorConfig,
     PDFFeatureExtractionConfig,
 )
 from ...contracts.exceptions import DocumentError
 from .engine_format_support import get_engine_format_support
+from .engine_needs_evaluator import infer_requirements
 from .models import (
     DocumentFeatureProfile,
     FeatureDocumentType,
@@ -35,7 +37,6 @@ from .models import (
     VisualCandidateKind,
     VisualEvidence,
 )
-from .requirement_inference import infer_requirements
 from .text_patterns import compact_text, contains_figure_caption, count_figure_caption_lines
 
 if TYPE_CHECKING:
@@ -76,7 +77,9 @@ def extract_pdf_features(
     open the PDF, visit each page, collect evidence, then build the final
     ``DocumentFeatureProfile`` consumed by the capability router.
     """
-    pdf_settings = (config or DocumentFeatureExtractionConfig()).pdf
+    resolved_config = config or DocumentFeatureExtractionConfig()
+    pdf_settings = resolved_config.pdf
+    evaluator_settings = resolved_config.engine_needs_evaluator
     pdf_document = open_pdf_with_pymupdf(path)
     total_pages = max(len(pdf_document), 1)
     feature_totals = PdfFeatureTotals()
@@ -102,6 +105,7 @@ def extract_pdf_features(
         total_pages=total_pages,
         totals=feature_totals,
         settings=pdf_settings,
+        evaluator_settings=evaluator_settings,
     )
 
 
@@ -292,6 +296,7 @@ def build_pdf_feature_profile(
     total_pages: int,
     totals: PdfFeatureTotals,
     settings: PDFFeatureExtractionConfig,
+    evaluator_settings: EngineNeedsEvaluatorConfig,
 ) -> DocumentFeatureProfile:
     """Build the public PDF feature profile from collected evidence."""
     text_evidence = build_text_evidence(totals)
@@ -306,6 +311,7 @@ def build_pdf_feature_profile(
         tables=table_evidence,
         visuals=visual_evidence,
         visual_candidates=strongest_visual_candidates,
+        settings=evaluator_settings,
     )
     return DocumentFeatureProfile(
         file_type=FeatureDocumentType.PDF,

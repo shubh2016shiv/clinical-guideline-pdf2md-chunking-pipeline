@@ -45,9 +45,11 @@ from pathlib import Path
 from ...contracts.configurations.pipeline_config import (
     DocumentFeatureExtractionConfig,
     DocxFeatureExtractionConfig,
+    EngineNeedsEvaluatorConfig,
 )
 from ...contracts.exceptions import DocumentError
 from .engine_format_support import get_engine_format_support
+from .engine_needs_evaluator import infer_requirements
 from .models import (
     DocumentFeatureProfile,
     FeatureDocumentType,
@@ -57,7 +59,6 @@ from .models import (
     VisualCandidateKind,
     VisualEvidence,
 )
-from .requirement_inference import infer_requirements
 from .text_patterns import compact_text, contains_figure_caption, count_figure_caption_lines
 
 logger = logging.getLogger(__name__)
@@ -102,7 +103,9 @@ def extract_docx_features(
     Step 6: Count figure captions.
     Step 7: Assemble and return the feature profile.
     """
-    docx_settings = (config or DocumentFeatureExtractionConfig()).docx
+    resolved_config = config or DocumentFeatureExtractionConfig()
+    docx_settings = resolved_config.docx
+    evaluator_settings = resolved_config.engine_needs_evaluator
     doc = open_word_document(path)
     totals = DocxFeatureTotals()
 
@@ -129,6 +132,7 @@ def extract_docx_features(
         estimated_pages=estimated_pages,
         totals=totals,
         settings=docx_settings,
+        evaluator_settings=evaluator_settings,
     )
 
 
@@ -220,6 +224,7 @@ def build_docx_feature_profile(
     estimated_pages: int,
     totals: DocxFeatureTotals,
     settings: DocxFeatureExtractionConfig,
+    evaluator_settings: EngineNeedsEvaluatorConfig,
 ) -> DocumentFeatureProfile:
     """
     Translate raw extraction totals into the structured profile consumed by the
@@ -272,6 +277,7 @@ def build_docx_feature_profile(
         tables=table_evidence,
         visuals=visual_evidence,
         visual_candidates=visual_candidates,
+        settings=evaluator_settings,
     )
 
     return DocumentFeatureProfile(

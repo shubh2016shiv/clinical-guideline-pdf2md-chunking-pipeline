@@ -62,6 +62,7 @@ from ...contracts.configurations.pipeline_config import (
 )
 from ...contracts.exceptions import DocumentError
 from .engine_format_support import get_engine_format_support
+from .engine_needs_evaluator import infer_requirements
 from .models import (
     DocumentFeatureProfile,
     FeatureDocumentType,
@@ -71,7 +72,6 @@ from .models import (
     VisualCandidateKind,
     VisualEvidence,
 )
-from .requirement_inference import infer_requirements
 from .text_patterns import compact_text, contains_figure_caption, count_figure_caption_lines
 
 logger = logging.getLogger(__name__)

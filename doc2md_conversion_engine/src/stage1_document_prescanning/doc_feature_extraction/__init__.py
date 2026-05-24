@@ -1,47 +1,47 @@
 """
 doc_feature_extraction
 ======================
-Deterministic evidence extraction for Stage 1 routing.
+Deterministic evidence extraction for Stage 1 document routing.
 
-This package extracts facts such as table counts, embedded images, vector
-objects, captions, and format support.  It does not perform semantic
-classification by itself; optional local VLM routing receives only the compact
-payload produced here.
+This package reads a source document (PDF, DOCX, PPTX, HTML) and extracts
+factual evidence: table counts, embedded images, vector drawing counts,
+caption patterns, and format support flags.  It produces a
+``DocumentFeatureProfile`` — a structured, serialisable summary of what the
+document contains.
+
+What this package does NOT do
+------------------------------
+It does not call any model or make any network request.  Engine selection
+(the decision of which conversion engine to use) lives in the sibling package
+``engine_decision_router``, which consumes the profile produced here.
 """
 
 from .capability_router import CapabilityBasedEngineRouter
-from .extractor import DocumentFeatureExtractor
+from .feature_extraction_entry_point import DocumentFeatureExtractionEntryPoint
 from .models import (
     DocumentFeatureProfile,
     DocumentRequirements,
     EngineFormatSupport,
     FeatureDocumentType,
     OllamaVisualRoutingDecision,
-    OllamaVisualRoutingPayload,
     TableEvidence,
     TextEvidence,
     VisualCandidate,
     VisualCandidateKind,
     VisualEvidence,
 )
-from .ollama_adjudicator import OllamaAdjudicatorConfig, OllamaVisualRoutingAdjudicator
-from .ollama_payload import build_ollama_visual_routing_payload
 
 __all__ = [
     "CapabilityBasedEngineRouter",
-    "DocumentFeatureExtractor",
+    "DocumentFeatureExtractionEntryPoint",
     "DocumentFeatureProfile",
     "DocumentRequirements",
     "EngineFormatSupport",
     "FeatureDocumentType",
-    "OllamaAdjudicatorConfig",
-    "OllamaVisualRoutingAdjudicator",
     "OllamaVisualRoutingDecision",
-    "OllamaVisualRoutingPayload",
     "TableEvidence",
     "TextEvidence",
     "VisualCandidate",
     "VisualCandidateKind",
     "VisualEvidence",
-    "build_ollama_visual_routing_payload",
 ]

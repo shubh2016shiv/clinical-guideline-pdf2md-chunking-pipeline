@@ -40,10 +40,12 @@ from typing import Any
 
 from ...contracts.configurations.pipeline_config import (
     DocumentFeatureExtractionConfig,
+    EngineNeedsEvaluatorConfig,
     PptxFeatureExtractionConfig,
 )
 from ...contracts.exceptions import DocumentError
 from .engine_format_support import get_engine_format_support
+from .engine_needs_evaluator import infer_requirements
 from .models import (
     DocumentFeatureProfile,
     FeatureDocumentType,
@@ -53,7 +55,6 @@ from .models import (
     VisualCandidateKind,
     VisualEvidence,
 )
-from .requirement_inference import infer_requirements
 from .text_patterns import compact_text, contains_figure_caption, count_figure_caption_lines
 
 logger = logging.getLogger(__name__)
@@ -112,7 +113,9 @@ def extract_pptx_features(
             flag diagram-heavy slides.
     Step 4: Assemble and return the feature profile.
     """
-    pptx_settings = (config or DocumentFeatureExtractionConfig()).pptx
+    resolved_config = config or DocumentFeatureExtractionConfig()
+    pptx_settings = resolved_config.pptx
+    evaluator_settings = resolved_config.engine_needs_evaluator
     presentation, mso_shape_type = open_presentation(path)
 
     # Step 1: Slide dimensions — stored in EMUs; we only need the product
@@ -152,6 +155,7 @@ def extract_pptx_features(
         total_slides=total_slides,
         totals=totals,
         settings=pptx_settings,
+        evaluator_settings=evaluator_settings,
     )
 
 
@@ -363,6 +367,7 @@ def build_pptx_feature_profile(
     total_slides: int,
     totals: PptxFeatureTotals,
     settings: PptxFeatureExtractionConfig,
+    evaluator_settings: EngineNeedsEvaluatorConfig,
 ) -> DocumentFeatureProfile:
     """
     Translate raw extraction totals into the structured profile consumed by the
@@ -406,6 +411,7 @@ def build_pptx_feature_profile(
         tables=table_evidence,
         visuals=visual_evidence,
         visual_candidates=visual_candidates,
+        settings=evaluator_settings,
     )
 
     return DocumentFeatureProfile(
