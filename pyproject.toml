@@ -27,80 +27,64 @@ dependencies = [
     # AI & NLP
     "google-generativeai==0.5.4",
     "tiktoken==0.7.0",
-
     # ------------------------------------------------------------------------
     # Document Conversion Engines (GPU-first with automatic CPU fallback)
     # ------------------------------------------------------------------------
-
     # Docling v2 — primary engine (MIT license, IBM Research)
     #   GPU: CUDA/MPS auto-detected via AcceleratorDetector → PdfPipelineOptions
     #   CPU: Automatic fallback when no GPU detected or force_cpu=True
     #   Models: Heron layout, TableFormer, GraniteDocling VLM (optional)
     "docling>=2.95.0",
-
     # MinerU v3 — secondary engine for complex diagrams (Apache 2.0-based)
     #   GPU: VLM engine (MinerU2.5-Pro-1.2B) via vLLM/LMDeploy/MLX
     #   CPU: pipeline backend (86.2 OmniDocBench score, no GPU required)
     #   Best for: flow diagrams, architecture diagrams, multi-column, cross-page tables
     "mineru[core]>=3.1.0",
-
     # ------------------------------------------------------------------------
     # Shared Runtime Dependencies (bumped for Docling v2 + MinerU v3 compat)
     # ------------------------------------------------------------------------
-
     # PyTorch ecosystem — GPU-first (CUDA/MPS), CPU fallback built-in
     # NOTE: Install CUDA variant via tool.uv.sources below for GPU acceleration
     #       CPU-only wheels are the default pip fallback on non-GPU machines
     "torch>=2.6.0,<3.0.0",
     "torchvision>=0.21.0,<1.0.0",
-
     # Image processing — MinerU floor is 11.0.0
     "Pillow>=11.0.0,<13.0.0",
-
     # Data processing — MinerU floor is 2.3.3
     "pandas>=2.3.3,<4.0.0",
-
     # ------------------------------------------------------------------------
     # Web / UI
     # ------------------------------------------------------------------------
     "streamlit>=1.41.0",
-
     # ------------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------------
     "tqdm>=4.66.4",
     "pathvalidate>=3.0.0",
     "psutil>=5.9.0",
-
     # Optional — used by existing image/table extraction fallbacks (guarded imports)
     "pymupdf>=1.24.0",
     "pdfplumber>=0.11.0",
-
     # ------------------------------------------------------------------------
     # Fault Tolerance
     # ------------------------------------------------------------------------
-
     # Circuit breaker — asyncio-native protected-call state management
     "aiobreaker>=1.2.0",
-
     # Configuration management — reads settings.yaml + env var overrides with full validation
     # [yaml] extra installs pyyaml for YamlConfigSettingsSource
     "pydantic-settings[yaml]>=2.7.0",
-
     # Retry with exponential backoff + jitter
     "stamina>=26.1.0",
-
     # Observability — Prometheus-style counters, gauges, and histograms
     "prometheus-client>=0.21.0",
-
     # Timeout: asyncio.timeout() from stdlib (Python 3.11+) — no extra dep needed
-
     # NVIDIA Management Library — read-only VRAM queries (GPUVRAMUsageMonitor)
     # Provides the ``pynvml`` import.  Degrades gracefully when not installed.
     "nvidia-ml-py>=12.0.0",
-
     # Former direct deps now pulled transitively by Docling/MinerU:
     #   pytesseract  → replaced by RapidOCR (Docling) / PaddleOCR (MinerU)
+    "tabulate>=0.10.0",
+    "pymupdf-layout>=1.27.2.3",
 ]
 
 [project.scripts]

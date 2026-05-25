@@ -26,6 +26,86 @@ document_constraints:
 
 
 # -----------------------------------------------------------------------------
+# Document Feature Extraction
+# Tunes deterministic evidence extraction used before capability-based routing.
+# These values define what becomes evidence/candidates; they do not directly
+# select an engine. Keep ranges conservative and tune from observed false
+# positives/negatives in your guideline corpus.
+# Read by: contracts/pipeline_config.py → stage1_document_prescanning/doc_feature_extraction
+# -----------------------------------------------------------------------------
+document_feature_extraction:
+  pdf:
+    # Fraction of page area that makes an image/table "large".
+    # Range: 0.05-0.15. Lower catches smaller figures; higher avoids logos/icons.
+    large_visual_area_ratio: 0.08
+
+    # Fraction of page area for an embedded image to become a visual candidate.
+    # Range: 0.01-0.05. Lower is sensitive; higher is quieter.
+    image_candidate_min_area_ratio: 0.02
+
+    # Drawing objects on one page before recording a vector-graphics candidate.
+    # Range: 20-100. Higher reduces noise from borders, bullets, and decorations.
+    vector_graphics_page_min_drawings: 20
+
+    # Keep only the top-ranked candidates for routing/debugging.
+    # Range: 1-50.
+    max_visual_candidates: 10
+
+  docx:
+    # Conservative estimate of body-text characters per rendered page.
+    # Used only to approximate page count. Err toward over-counting pages.
+    # Range: 1500-3000. Lower → more pages estimated; higher → fewer.
+    average_characters_per_page: 2000
+
+    # Keep only this many visual candidates (one per feature type: images, tables).
+    # Range: 1-50.
+    max_visual_candidates: 10
+
+  pptx:
+    # Fraction of slide area that makes a picture shape "large" (primary content vs decoration).
+    # Range: 0.05-0.15. Lower catches smaller figures; higher ignores logos/icons.
+    large_visual_area_ratio: 0.08
+
+    # Visual shapes (images + charts + drawings) on one slide before flagging it as
+    # a SLIDE_VISUAL_CLUSTER candidate (likely an infographic or architecture diagram).
+    # Range: 5-15. Lower is more sensitive; higher reduces false positives.
+    diagram_heavy_slide_min_visual_shapes: 8
+
+    # Keep only the top-ranked candidates for routing/debugging.
+    # Range: 1-50.
+    max_visual_candidates: 10
+
+  html:
+    # Conservative estimate of readable body-text characters per page equivalent.
+    # HTML has no real pages — used only to normalise to a comparable unit.
+    # Range: 1500-3000. Lower → more pages estimated; higher → fewer.
+    average_characters_per_page: 2000
+
+    # Keep only the top-ranked candidates for routing/debugging.
+    # Candidates ranked by label presence (alt text / caption); no area available.
+    # Range: 1-50.
+    max_visual_candidates: 10
+
+  engine_needs_evaluator:
+    # Minimum fraction of page/slide area for a visual to be treated as meaningful content.
+    # Visuals BELOW this threshold AND whose label contains a decorative term are excluded
+    # from VLM routing — they are likely logos, icons, or dividers, not clinical figures.
+    # A large image labelled "logo" is still inspected (size alone triggers routing).
+    # Range: 0.03-0.10.
+    meaningful_visual_area_ratio: 0.05
+
+    # Words in alt text or nearby caption that flag a small visual as decorative.
+    # Only applied to visuals smaller than meaningful_visual_area_ratio.
+    # Add domain-specific terms (e.g. watermark, stamp) if your corpus needs them.
+    decorative_image_terms:
+      - logo
+      - icon
+      - header
+      - footer
+      - decorative
+
+
+# -----------------------------------------------------------------------------
 # Engine Routing
 # Controls which conversion engine is selected and how complexity is scored.
 # Read by: contracts/pipeline_config.py → stage1_document_prescanning
@@ -41,6 +121,12 @@ engine_routing:
     diagram_heavy_page: 5
     large_table_page: 4
     low_text_density_page: 2        # text_density < 0.02
+  # Local Ollama model used for visual routing decisions
+  ollama_client:
+    base_url: "http://127.0.0.1:11434"
+    model: "qwen3.5:4b"
+    timeout_seconds: 30.0           # fail fast if Ollama is not running
+    max_candidates: 5               # top-N visual candidates sent per document
 
 
 # -----------------------------------------------------------------------------

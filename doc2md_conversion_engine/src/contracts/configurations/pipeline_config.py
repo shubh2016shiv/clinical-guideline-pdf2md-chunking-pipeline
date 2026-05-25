@@ -127,6 +127,208 @@ class DocumentConstraintsConfig(BaseModel):
     )
 
 
+class PDFFeatureExtractionConfig(BaseModel):
+    """
+    PDF-specific knobs for deterministic document feature extraction.
+
+    These values tune what becomes a *candidate* for routing evidence.  They do
+    not directly choose an engine; requirement inference and capability routing
+    consume the extracted evidence later.
+    """
+
+    large_visual_area_ratio: float = Field(
+        default=0.08,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum fraction of page area for an image/table region to be counted as large. "
+            "Typical useful range: 0.05-0.15. Lower values catch smaller clinical figures "
+            "but may include logos or icons."
+        ),
+    )
+    image_candidate_min_area_ratio: float = Field(
+        default=0.02,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum fraction of page area for an embedded PDF image to become a visual "
+            "candidate. Typical useful range: 0.01-0.05."
+        ),
+    )
+    vector_graphics_page_min_drawings: int = Field(
+        default=20,
+        ge=1,
+        description=(
+            "Minimum PyMuPDF drawing objects on one page before the page is recorded as a "
+            "vector-graphics candidate. Typical useful range: 20-100. Higher values reduce "
+            "noise from decorative lines, borders, and bullets."
+        ),
+    )
+    max_visual_candidates: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description=(
+            "Maximum PDF visual candidates retained after ranking. Ollama/Qwen receives at "
+            "most a further subset from the payload builder."
+        ),
+    )
+
+
+class DocxFeatureExtractionConfig(BaseModel):
+    """
+    DOCX-specific knobs for deterministic document feature extraction.
+
+    DOCX stores no page coordinates or bounding-box data in its XML; page count
+    is estimated by dividing character count by ``average_characters_per_page``.
+    These values tune what becomes a *candidate* for routing evidence.
+    """
+
+    average_characters_per_page: int = Field(
+        default=2_000,
+        ge=100,
+        description=(
+            "Conservative estimate of body-text characters per rendered page. "
+            "Used only to approximate page count; err toward over-counting pages "
+            "to avoid underestimating rendering cost. Typical range: 1500-3000."
+        ),
+    )
+    max_visual_candidates: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description=(
+            "Maximum DOCX visual candidates retained for downstream routing. "
+            "One candidate is emitted per feature type (images, tables) rather "
+            "than per individual instance."
+        ),
+    )
+
+
+class PptxFeatureExtractionConfig(BaseModel):
+    """
+    PPTX-specific knobs for deterministic document feature extraction.
+
+    Shapes in PPTX store their size in EMUs (English Metric Units).  All area
+    thresholds here are expressed as fractions of the total slide area so that
+    comparisons are consistent across widescreen (16:9) and standard (4:3)
+    presentations.  These values tune what becomes a *candidate* for routing
+    evidence.
+    """
+
+    large_visual_area_ratio: float = Field(
+        default=0.08,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum fraction of slide area for a picture shape to be counted as large. "
+            "Typical useful range: 0.05-0.15. Shapes below this threshold are likely "
+            "decorative (logos, icons, divider lines) rather than primary content."
+        ),
+    )
+    diagram_heavy_slide_min_visual_shapes: int = Field(
+        default=8,
+        ge=1,
+        description=(
+            "Minimum number of visual shapes (images + charts + drawings) on one slide "
+            "before the slide is flagged as a SLIDE_VISUAL_CLUSTER candidate. "
+            "Typical useful range: 5-15. Lower catches sparse diagrams; higher reduces "
+            "false positives from decorative slides."
+        ),
+    )
+    max_visual_candidates: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description=(
+            "Maximum PPTX visual candidates retained after ranking. "
+            "One candidate is emitted per shape instance (images, charts, tables) "
+            "plus one SLIDE_VISUAL_CLUSTER per diagram-heavy slide."
+        ),
+    )
+
+
+class HtmlFeatureExtractionConfig(BaseModel):
+    """
+    HTML-specific knobs for deterministic document feature extraction.
+
+    HTML has no concept of pages — it is a continuous document.  Page count is
+    estimated by dividing character count by ``average_characters_per_page``.
+    Image sizes are not knowable without rendering (CSS can override any attribute),
+    so no area-threshold is exposed here.  These values tune what becomes a
+    *candidate* for routing evidence.
+    """
+
+    average_characters_per_page: int = Field(
+        default=2_000,
+        ge=100,
+        description=(
+            "Conservative estimate of readable body-text characters per page equivalent. "
+            "Used only to normalise HTML into a comparable page-count unit for cross-format "
+            "feature profiles. Typical range: 1500-3000."
+        ),
+    )
+    max_visual_candidates: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description=(
+            "Maximum HTML visual candidates retained after ranking. "
+            "One candidate is emitted per <img>, <svg>, <figure>, and <table> tag. "
+            "HTML carries no display-size information, so candidates are ranked by "
+            "label presence (alt text / nearby caption) rather than area."
+        ),
+    )
+
+
+class EngineNeedsEvaluatorConfig(BaseModel):
+    """
+    Thresholds that control how extracted visual candidates are judged for VLM routing.
+
+    After feature extraction, every image/chart/SVG is a *candidate*.  Not all
+    candidates are worth routing to a vision model — tiny logos, bullet icons, and
+    decorative dividers would generate noise.  These two thresholds implement the
+    filter: a candidate is skipped only when it is *both* small *and* labelled
+    with a term that strongly suggests decoration.  Either condition alone is not
+    enough to skip — a large image labelled "logo" may still carry clinical content.
+    """
+
+    meaningful_visual_area_ratio: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum fraction of page/slide area for a visual to be considered meaningful "
+            "content rather than decoration. Visuals below this threshold AND whose label "
+            "contains a decorative term are excluded from VLM routing. "
+            "Typical useful range: 0.03-0.10. Lower catches more small figures; higher "
+            "reduces noise from logos and icons."
+        ),
+    )
+    decorative_image_terms: list[str] = Field(
+        default=["logo", "icon", "header", "footer", "decorative"],
+        description=(
+            "Words in a candidate's alt text or nearby caption that strongly suggest the "
+            "visual is decorative rather than clinical content. Only applied to visuals "
+            "smaller than ``meaningful_visual_area_ratio`` — a large image labelled 'logo' "
+            "is still inspected. Add domain-specific terms (e.g. 'watermark', 'stamp') "
+            "if your corpus has recurring decorative patterns."
+        ),
+    )
+
+
+class DocumentFeatureExtractionConfig(BaseModel):
+    """Settings for deterministic feature extraction before engine routing."""
+
+    pdf: PDFFeatureExtractionConfig = Field(default_factory=PDFFeatureExtractionConfig)
+    docx: DocxFeatureExtractionConfig = Field(default_factory=DocxFeatureExtractionConfig)
+    pptx: PptxFeatureExtractionConfig = Field(default_factory=PptxFeatureExtractionConfig)
+    html: HtmlFeatureExtractionConfig = Field(default_factory=HtmlFeatureExtractionConfig)
+    engine_needs_evaluator: EngineNeedsEvaluatorConfig = Field(
+        default_factory=EngineNeedsEvaluatorConfig
+    )
+
+
 class ConversionEngineChoice(StrEnum):
     """
     How the pipeline selects a conversion engine.
@@ -163,6 +365,48 @@ class ComplexityWeightsConfig(BaseModel):
     )
 
 
+class OllamaClientConfig(BaseModel):
+    """
+    Connection settings for the local Ollama server used in engine routing.
+
+    Ollama runs locally so that routing decisions never send patient data to an
+    external API.  These values must match how ``ollama serve`` was started on
+    this machine.
+
+    Settings key: ``engine_routing.ollama_client``
+    """
+
+    base_url: str = Field(
+        default="http://127.0.0.1:11434",
+        description="Root URL of the local Ollama HTTP server.",
+    )
+    model: str = Field(
+        default="qwen3.5:4b",
+        description=(
+            "Ollama model tag.  Must support JSON output mode "
+            "(format: json in the API request)."
+        ),
+    )
+    timeout_seconds: float = Field(
+        default=30.0,
+        gt=0.0,
+        description=(
+            "Seconds to wait for Ollama before raising an error.  "
+            "Stage 1 routing is on the critical path — keep this short enough "
+            "that a hung Ollama process does not block the whole pipeline."
+        ),
+    )
+    max_candidates: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            "Maximum number of visual candidates sent to the Ollama model per "
+            "document.  Candidates are pre-ranked by size and label presence; "
+            "the top N are the most informative."
+        ),
+    )
+
+
 class EngineRoutingConfig(BaseModel):
     """Controls which engine is selected and how complexity is scored."""
 
@@ -193,6 +437,8 @@ class EngineRoutingConfig(BaseModel):
     complexity_weights: ComplexityWeightsConfig = Field(
         default_factory=ComplexityWeightsConfig
     )
+
+    ollama_client: OllamaClientConfig = Field(default_factory=OllamaClientConfig)
 
 
 class WindowedExtractionConfig(BaseModel):
@@ -597,6 +843,9 @@ class PipelineConfig(BaseSettings):
     storage: DocumentStorageConfig = Field(default_factory=DocumentStorageConfig)
     document_constraints: DocumentConstraintsConfig = Field(
         default_factory=DocumentConstraintsConfig
+    )
+    document_feature_extraction: DocumentFeatureExtractionConfig = Field(
+        default_factory=DocumentFeatureExtractionConfig
     )
     engine_routing: EngineRoutingConfig = Field(default_factory=EngineRoutingConfig)
     mineru_engine: MinerUEngineConfig = Field(default_factory=MinerUEngineConfig)

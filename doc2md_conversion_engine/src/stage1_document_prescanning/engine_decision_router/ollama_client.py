@@ -104,7 +104,7 @@ class OllamaClient:
         try:
             with urlopen(request, timeout=self._config.timeout_seconds) as response:
                 return response.read().decode("utf-8")
-        except URLError as exc:
+        except (URLError, TimeoutError, OSError) as exc:
             raise DocumentError(
                 "Failed to reach local Ollama.",
                 context={
