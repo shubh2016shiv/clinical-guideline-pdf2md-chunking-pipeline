@@ -4,8 +4,9 @@ pipeline_orchestrator.py
 Wires the preflight gate and Stage 1 modules together into a single call.
 
 This is the only place that knows the order: intake → hash → provision →
-scan → classify.  Entrypoints (CLI, API) call this and receive a result
-object — they never touch stage-internal modules directly.
+feature extraction → optional local visual adjudication → capability routing.
+Entrypoints (CLI, API) call this and receive a result object — they never touch
+stage-internal modules directly.
 
 Usage
 -----
@@ -36,11 +37,12 @@ from pathlib import Path
 from .contracts.configurations.pipeline_config import PipelineConfig
 from .contracts.exceptions import DocumentError
 from .file_upload_management import DocumentUploadIntake, UploadedDocumentStagingStore
-from .stage1_document_prescanning import (
-    DocumentComplexityClassifier,
-    DocumentPageStructureScanner,
-    DocumentSHA256Hasher,
+from .stage1_document_prescanning import DocumentSHA256Hasher
+from .stage1_document_prescanning.doc_feature_extraction import (
+    CapabilityBasedEngineRouter,
+    DocumentFeatureExtractionEntryPoint,
 )
+from .stage1_document_prescanning.engine_decision_router import EngineRoutingAgent
 
 
 @dataclass
@@ -58,6 +60,9 @@ class Stage1Result:
     complexity_score: float
     confidence: float
     reason: str
+    feature_summary: str
+    inferred_requirements: list[str]
+    ollama_payload: dict[str, object] | None
     elapsed_ms: float
     errors: list[str] = field(default_factory=list)
 
@@ -76,8 +81,9 @@ class PipelineOrchestrator:
         self._intake = DocumentUploadIntake(config.document_constraints)
         self._hasher = DocumentSHA256Hasher(config.document_constraints)
         self._store = UploadedDocumentStagingStore(config.storage)
-        self._scanner = DocumentPageStructureScanner(config.document_constraints)
-        self._classifier = DocumentComplexityClassifier(config.engine_routing)
+        self._feature_extractor = DocumentFeatureExtractionEntryPoint(config.document_feature_extraction)
+        self._routing_agent = EngineRoutingAgent(config.engine_routing.ollama_client)
+        self._router = CapabilityBasedEngineRouter(config.engine_routing)
 
     # ------------------------------------------------------------------
     # Public API
@@ -85,11 +91,11 @@ class PipelineOrchestrator:
 
     def run_stage1(self, document_path: Path) -> Stage1Result:
         """
-        Preflight → hash → provision → scan → classify.
+        Preflight → hash → provision → feature extraction → route.
 
         Returns a ``Stage1Result`` on success.  Raises ``DocumentError`` on
         any failure (preflight rejection, corrupt file, unsupported format,
-        page count exceeded, invalid config).
+        invalid config, or failed feature extraction).
         """
         t0 = time.perf_counter()
         errors: list[str] = []
@@ -103,11 +109,19 @@ class PipelineOrchestrator:
         # -- Workspace provisioning -----------------------------------------
         output_dir = self._store.provision(hash_result.sha256_hex)
 
-        # -- Page structure scan --------------------------------------------
-        scan_result = self._scanner.scan(document_path, hash_result.document_type)
+        # -- Deterministic feature evidence ---------------------------------
+        feature_profile = self._feature_extractor.extract(document_path, hash_result.document_type)
+        ollama_payload = None
+        visual_decision = None
+        if feature_profile.requirements.needs_local_vlm_adjudication:
+            try:
+                visual_decision = self._routing_agent.decide(feature_profile)
+                ollama_payload = visual_decision.model_dump(mode="json")
+            except DocumentError as exc:
+                errors.append(str(exc))
 
-        # -- Complexity classification --------------------------------------
-        classification = self._classifier.classify(scan_result.profiles)
+        # -- Capability-based engine routing --------------------------------
+        classification = self._router.route(feature_profile, visual_decision=visual_decision)
 
         elapsed = (time.perf_counter() - t0) * 1000
 
@@ -117,12 +131,15 @@ class PipelineOrchestrator:
             job_id=hash_result.sha256_hex,
             document_type=hash_result.document_type.value,
             file_size_bytes=hash_result.file_size_bytes,
-            total_pages=scan_result.total_pages,
+            total_pages=feature_profile.page_or_unit_count,
             output_dir=output_dir,
             engine=classification.engine.value,
             complexity_score=classification.complexity_score,
             confidence=classification.confidence,
             reason=classification.reason,
+            feature_summary=feature_profile.compact_summary(),
+            inferred_requirements=feature_profile.requirements.rationale,
+            ollama_payload=ollama_payload,
             elapsed_ms=elapsed,
             errors=errors,
         )

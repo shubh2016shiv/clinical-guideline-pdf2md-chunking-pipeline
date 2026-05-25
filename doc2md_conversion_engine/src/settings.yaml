@@ -16,7 +16,7 @@ storage:
 
 # -----------------------------------------------------------------------------
 # Document Constraints
-# Enforced by Stage 1 (document_sha256_hasher, document_page_structure_scanner)
+# Enforced by Stage 1 (document_sha256_hasher)
 # before any GPU, model loading, or external API is touched.
 # Read by: contracts/pipeline_config.py → stage1_document_prescanning
 # -----------------------------------------------------------------------------
@@ -107,25 +107,18 @@ document_feature_extraction:
 
 # -----------------------------------------------------------------------------
 # Engine Routing
-# Controls which conversion engine is selected and how complexity is scored.
+# Controls which conversion engine is selected.
+# Routing is driven by deterministic feature extraction + local Ollama VLM —
+# not by hand-tuned numeric complexity thresholds.
 # Read by: contracts/pipeline_config.py → stage1_document_prescanning
 # -----------------------------------------------------------------------------
 engine_routing:
   conversion_engine: auto          # auto | mineru | docling
-  complexity_threshold_complex: 2.0   # score >= this → MinerU VLM (GPU required)
-  complexity_threshold_moderate: 0.5  # score >= this → MinerU pipeline (CPU)
-                                      # score < 0.5   → Docling (in-process)
-  # Complexity scoring weights (per page, normalised by total pages)
-  complexity_weights:
-    multi_column_page: 3
-    diagram_heavy_page: 5
-    large_table_page: 4
-    low_text_density_page: 2        # text_density < 0.02
   # Local Ollama model used for visual routing decisions
   ollama_client:
     base_url: "http://127.0.0.1:11434"
     model: "qwen3.5:4b"
-    timeout_seconds: 30.0           # fail fast if Ollama is not running
+    timeout_seconds: 600.0          # 10 min — reasoning models on local hardware need time
     max_candidates: 5               # top-N visual candidates sent per document
 
 

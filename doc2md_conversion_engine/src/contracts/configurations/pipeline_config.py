@@ -347,24 +347,6 @@ class ConversionEngineChoice(StrEnum):
     DOCLING = "docling"
 
 
-class ComplexityWeightsConfig(BaseModel):
-    """
-    Per-feature weights used by the complexity classifier to score a document.
-
-    Higher weight = this feature pushes the score further towards MinerU VLM.
-    Scores are summed across all pages and divided by total page count.
-    """
-
-    multi_column_page: float = Field(default=3.0, ge=0.0)
-    diagram_heavy_page: float = Field(default=5.0, ge=0.0)
-    large_table_page: float = Field(default=4.0, ge=0.0)
-    low_text_density_page: float = Field(
-        default=2.0,
-        ge=0.0,
-        description="Applied to pages with text_density < 0.02.",
-    )
-
-
 class OllamaClientConfig(BaseModel):
     """
     Connection settings for the local Ollama server used in engine routing.
@@ -388,12 +370,12 @@ class OllamaClientConfig(BaseModel):
         ),
     )
     timeout_seconds: float = Field(
-        default=30.0,
+        default=600.0,
         gt=0.0,
         description=(
             "Seconds to wait for Ollama before raising an error.  "
-            "Stage 1 routing is on the critical path — keep this short enough "
-            "that a hung Ollama process does not block the whole pipeline."
+            "10 minutes by default — reasoning models running on local hardware "
+            "need time to think through complex visual routing decisions."
         ),
     )
     max_candidates: int = Field(
@@ -408,34 +390,15 @@ class OllamaClientConfig(BaseModel):
 
 
 class EngineRoutingConfig(BaseModel):
-    """Controls which engine is selected and how complexity is scored."""
+    """Controls which conversion engine is selected."""
 
     conversion_engine: ConversionEngineChoice = Field(
         default=ConversionEngineChoice.AUTO,
         description=(
             "Engine selection mode.  "
-            "auto = run the classifier and choose the best engine.  "
-            "mineru / docling = bypass the classifier."
+            "auto = let feature extraction + Ollama VLM decide.  "
+            "mineru / docling = bypass routing entirely."
         ),
-    )
-
-    complexity_threshold_complex: float = Field(
-        default=2.0,
-        ge=0.0,
-        description="Complexity score at or above which MinerU VLM is selected.",
-    )
-
-    complexity_threshold_moderate: float = Field(
-        default=0.5,
-        ge=0.0,
-        description=(
-            "Complexity score at or above which MinerU pipeline (CPU) is selected.  "
-            "Scores below this threshold route to Docling."
-        ),
-    )
-
-    complexity_weights: ComplexityWeightsConfig = Field(
-        default_factory=ComplexityWeightsConfig
     )
 
     ollama_client: OllamaClientConfig = Field(default_factory=OllamaClientConfig)
@@ -883,17 +846,3 @@ class PipelineConfig(BaseSettings):
             YamlConfigSettingsSource(settings_cls, yaml_file=_SETTINGS_YAML_PATH),
         )
 
-    @model_validator(mode="after")
-    def _validate_threshold_ordering(self) -> PipelineConfig:
-        """
-        Ensure complexity thresholds are logically ordered:
-        complex threshold must be strictly above moderate threshold.
-        """
-        er = self.engine_routing
-        if er.complexity_threshold_complex <= er.complexity_threshold_moderate:
-            raise ValueError(
-                f"complexity_threshold_complex ({er.complexity_threshold_complex}) "
-                f"must be greater than complexity_threshold_moderate "
-                f"({er.complexity_threshold_moderate})."
-            )
-        return self
