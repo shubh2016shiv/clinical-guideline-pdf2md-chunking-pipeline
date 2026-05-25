@@ -101,9 +101,18 @@ class DocumentConstraintsConfig(BaseModel):
     Hard limits on the source document enforced by Stage 1 before any
     GPU, CPU-intensive processing, or external API is touched.
 
-    Rejecting an oversized document here is cheap — it happens in the hasher
-    after streaming a few MB at most.  Discovering the same problem at Stage 2
-    would waste minutes of GPU warm-up time.
+    Enforcement points
+    ------------------
+    ``max_file_size_bytes``
+        Enforced by ``DocumentSHA256Hasher`` — the first place file size is
+        known (a single ``stat()`` call, before any parsing begins).
+
+    ``max_pages``
+        Enforced by ``DocumentFeatureExtractionEntryPoint`` — the first place
+        page count is known (requires format parsing to extract the page count).
+
+    Rejecting at Stage 1 is cheap.  Discovering the same problem at Stage 2
+    would waste minutes of GPU warm-up and windowed extraction time.
     """
 
     max_file_size_bytes: int = Field(
@@ -120,9 +129,10 @@ class DocumentConstraintsConfig(BaseModel):
         default=500,
         ge=1,
         description=(
-            "Maximum page count accepted by the structure scanner.  "
-            "Documents exceeding this are rejected with DocumentTooLargeError.  "
-            "For DOCX and HTML the page count is estimated from word count."
+            "Maximum page count.  Documents exceeding this are rejected with "
+            "DocumentTooLargeError after feature extraction, before any engine "
+            "is allocated.  For DOCX and HTML the page count is estimated from "
+            "character count."
         ),
     )
 

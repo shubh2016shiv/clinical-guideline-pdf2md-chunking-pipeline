@@ -81,7 +81,10 @@ class PipelineOrchestrator:
         self._intake = DocumentUploadIntake(config.document_constraints)
         self._hasher = DocumentSHA256Hasher(config.document_constraints)
         self._store = UploadedDocumentStagingStore(config.storage)
-        self._feature_extractor = DocumentFeatureExtractionEntryPoint(config.document_feature_extraction)
+        self._feature_extractor = DocumentFeatureExtractionEntryPoint(
+            feature_config=config.document_feature_extraction,
+            constraints=config.document_constraints,
+        )
         self._routing_agent = EngineRoutingAgent(config.engine_routing.ollama_client)
         self._router = CapabilityBasedEngineRouter(config.engine_routing)
 

@@ -16,8 +16,10 @@ storage:
 
 # -----------------------------------------------------------------------------
 # Document Constraints
-# Enforced by Stage 1 (document_sha256_hasher)
-# before any GPU, model loading, or external API is touched.
+# Two enforcement points, both in Stage 1:
+#   max_file_size_bytes → document_sha256_hasher   (size known after stat())
+#   max_pages           → feature_extraction_entry_point  (pages known after format parsing)
+# Both fire before any GPU, model loading, or external API is touched.
 # Read by: contracts/pipeline_config.py → stage1_document_prescanning
 # -----------------------------------------------------------------------------
 document_constraints:

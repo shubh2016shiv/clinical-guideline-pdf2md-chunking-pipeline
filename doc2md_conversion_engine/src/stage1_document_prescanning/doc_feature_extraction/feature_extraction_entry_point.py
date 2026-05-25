@@ -6,14 +6,24 @@ Single public entry point for deterministic document feature extraction.
 Callers hand in a document path and its type; this module hands back a
 ``DocumentFeatureProfile``.  The fact that PDF, DOCX, PPTX, and HTML each
 have their own extractor module is an implementation detail hidden here.
+
+Constraint enforcement
+----------------------
+Page-count enforcement lives here because this is the first — and only —
+place the page count is known before Stage 2 work begins.  File-size
+enforcement lives in ``DocumentSHA256Hasher`` for the same reason: enforce
+at the earliest point the information is available.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from ...contracts.configurations.pipeline_config import DocumentFeatureExtractionConfig
-from ...contracts.exceptions import DocumentError
+from ...contracts.configurations.pipeline_config import (
+    DocumentConstraintsConfig,
+    DocumentFeatureExtractionConfig,
+)
+from ...contracts.exceptions import DocumentError, DocumentTooLargeError
 from ...contracts.pipeline_domain_types import DocumentType
 from .docx import extract_docx_features
 from .html import extract_html_features
@@ -36,20 +46,54 @@ class DocumentFeatureExtractionEntryPoint:
     """
     Produce a ``DocumentFeatureProfile`` for any supported document format.
 
-    Config (thresholds from ``settings.yaml``) is injected once at construction
-    and forwarded to every per-format extractor call — so tuning a threshold in
-    ``settings.yaml`` takes effect for all formats without touching this class.
+    Accepts two config objects injected at construction:
+
+    ``feature_config``
+        Format-specific extraction thresholds from ``settings.yaml``.
+        Forwarded to every per-format extractor so tuning a threshold takes
+        effect for all formats without touching this class.
+
+    ``constraints``
+        Hard document limits from ``settings.yaml`` (``document_constraints``).
+        The page-count ceiling is enforced here — the first point where the
+        page count is known.  File-size enforcement happens earlier, in
+        ``DocumentSHA256Hasher``.
     """
 
-    def __init__(self, config: DocumentFeatureExtractionConfig | None = None) -> None:
-        self._config = config or DocumentFeatureExtractionConfig()
+    def __init__(
+        self,
+        feature_config: DocumentFeatureExtractionConfig | None = None,
+        constraints: DocumentConstraintsConfig | None = None,
+    ) -> None:
+        self._config = feature_config or DocumentFeatureExtractionConfig()
+        self._constraints = constraints or DocumentConstraintsConfig()
 
     def extract(self, document_path: Path, document_type: DocumentType) -> DocumentFeatureProfile:
-        """Return the feature profile for *document_path* based on its *document_type*."""
+        """
+        Return the feature profile for *document_path* based on its *document_type*.
+
+        Raises:
+            DocumentError: Unsupported format.
+            DocumentTooLargeError: Page count exceeds ``constraints.max_pages``.
+        """
         extractor = FORMAT_EXTRACTORS.get(document_type)
         if extractor is None:
             raise DocumentError(
                 f"Feature extraction is not supported for {document_type.value!r}.",
                 context={"path": str(document_path), "document_type": document_type.value},
             )
-        return extractor(document_path, self._config)
+
+        profile = extractor(document_path, self._config)
+
+        if profile.page_or_unit_count > self._constraints.max_pages:
+            raise DocumentTooLargeError(
+                f"Document has {profile.page_or_unit_count} pages, "
+                f"which exceeds the configured limit of {self._constraints.max_pages}.",
+                context={
+                    "path": str(document_path),
+                    "page_count": profile.page_or_unit_count,
+                    "limit_pages": self._constraints.max_pages,
+                },
+            )
+
+        return profile

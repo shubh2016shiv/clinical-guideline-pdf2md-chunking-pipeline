@@ -52,11 +52,23 @@ def _print_result(result: Stage1Result) -> None:
     print(f"      {'Job ID:':<18s} {result.job_id[:12]}...")
     print(f"      {'Pages:':<18s} {result.total_pages}")
     print(f"      {'Engine:':<18s} {result.engine}")
-    print(
-        f"      {'Complexity:':<18s} {result.complexity_score:.2f}  "
-        f"(confidence: {result.confidence:.0%})"
-    )
+    if result.complexity_score:
+        print(
+            f"      {'Complexity:':<18s} {result.complexity_score:.2f}  "
+            f"(confidence: {result.confidence:.0%})"
+        )
+    else:
+        print(f"      {'Routing conf:':<18s} {result.confidence:.0%}")
     print(f"      {'Reason:':<18s} {result.reason}")
+    print(f"      {'Features:':<18s} {result.feature_summary}")
+    if result.inferred_requirements:
+        print(f"      {'Requirements:':<18s} {'; '.join(result.inferred_requirements)}")
+    if result.ollama_payload:
+        candidates = result.ollama_payload.get("visual_candidates_requiring_explanation") or []
+        candidate_count = len(candidates) if isinstance(candidates, list) else 0
+        engine_rec = result.ollama_payload.get("recommended_structure_engine", "—")
+        confidence = result.ollama_payload.get("confidence", 0.0)
+        print(f"      {'Ollama decision:':<18s} {engine_rec}  (confidence: {confidence:.0%},  {candidate_count} candidate(s) flagged)")
     print(f"      {'Time:':<18s} {result.elapsed_ms:.0f} ms")
     print(f"      {'Output:':<18s} {result.output_dir}")
 
