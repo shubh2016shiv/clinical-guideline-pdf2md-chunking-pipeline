@@ -1,12 +1,23 @@
 """
-doc_feature_extraction/models.py
-================================
-Small value objects for deterministic document evidence extraction.
+stage1_document_prescanning/feature_extraction/feature_evidence_models.py
+=========================================================================
+Stage 1 · Step 2 of 3 — the shared vocabulary for everything we measure.
 
-The extractor reports facts about a document.  It does not decide which
-conversion engine is "best"; requirement inference and routing consume these
-facts later.  Keeping those concerns separate makes Stage 1 easier to debug
-and safer to extend to more formats.
+This file defines the data shapes used to record what a document contains: how
+much text, what kind of tables, how the page is laid out, which visuals appear,
+and the final summary that bundles it all together. Think of it as the set of
+labelled boxes the readers fill in and the routing step reads out of.
+
+Two important properties of these boxes:
+
+  * They hold FACTS, not opinions. A box says "this table has 8 columns", never
+    "this document is hard" — judging difficulty is the routing step's job.
+  * They are frozen (read-only) once created, so a fact measured by a reader
+    cannot be quietly changed somewhere downstream.
+
+When a particular format genuinely cannot measure something cheaply, the
+corresponding box is left at its honest default (for example column_count = 1,
+or has_merged_cells = False) rather than filled in with a guess.
 """
 
 from __future__ import annotations
@@ -38,7 +49,14 @@ class VisualCandidateKind(StrEnum):
 
 
 class TextEvidence(BaseModel):
-    """Document-level text availability and density evidence."""
+    """
+    What we found out about the document's text.
+
+    The most important field is ``native_text_available``: is there real,
+    selectable text we can read directly, or is the document just pictures of
+    text (a scan) that would need OCR? The character counts and density give a
+    rough sense of how text-heavy the document is.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -86,7 +104,14 @@ class TableEvidence(BaseModel):
 
 
 class VisualEvidence(BaseModel):
-    """Factual visual-object evidence collected from the source format."""
+    """
+    A count of the non-text things in the document.
+
+    Embedded images, vector drawings, charts, and so on. These counts feed the
+    "is there a figure worth summarising later?" signal — they do NOT affect
+    which engine is chosen. A document full of pictures is not, by itself, harder
+    to convert; it just has more for a later stage to describe.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -147,7 +172,12 @@ class VisualCandidate(BaseModel):
 
 
 class EngineFormatSupport(BaseModel):
-    """Hard file-format support for candidate conversion engines."""
+    """
+    Which engines can open this document's format at all.
+
+    Two plain yes/no answers — can Docling read it, can MinerU read it — plus
+    optional notes. This is basic compatibility, not a quality judgement.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -189,7 +219,15 @@ class DocumentRequirements(BaseModel):
 
 
 class DocumentFeatureProfile(BaseModel):
-    """Top-level deterministic feature profile for one source document."""
+    """
+    The complete picture of one document — the output of Step 2.
+
+    This is the single object a reader produces and the routing step consumes.
+    It gathers every other evidence box (text, tables, layout, visuals), the list
+    of visual candidates, which engines can open the format, and the resolved
+    needs, all in one place. If you want to know "what did Stage 1 learn about
+    this file?", this object is the answer.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -204,7 +242,14 @@ class DocumentFeatureProfile(BaseModel):
     requirements: DocumentRequirements
 
     def compact_summary(self) -> str:
-        """One-line summary suitable for logs and CLI output."""
+        """
+        Condense the whole profile into one readable line for logs and the CLI.
+
+        Lists the headline counts (pages, characters, tables, columns, images)
+        and tacks on short flags like ``complex_layout`` or ``complex_tables``
+        only when those conditions are actually present, so a human scanning the
+        output can see at a glance why a document might have been promoted.
+        """
         bits = [
             f"{self.file_type.value}",
             f"units={self.page_or_unit_count}",

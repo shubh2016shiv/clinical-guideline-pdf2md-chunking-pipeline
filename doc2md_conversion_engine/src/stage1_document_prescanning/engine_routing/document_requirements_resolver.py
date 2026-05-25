@@ -1,33 +1,38 @@
 """
-doc_feature_extraction/engine_needs_evaluator.py
-=================================================
-Translate extracted document evidence into the processing capabilities the
-conversion engine must provide.
+stage1_document_prescanning/engine_routing/document_requirements_resolver.py
+============================================================================
+Stage 1 · Step 3 of 3 (part 1) — turn raw evidence into plain yes/no needs.
 
-Evidence (counts, structural flags, candidate lists) goes in.  A
-``DocumentRequirements`` object — boolean flags that tell the router what the
-document needs — comes out.  This is not the final routing decision; it only
-makes needs visible so the capability router can promote or default accordingly.
+The routing policy does not want to reason about raw numbers like "135 tables"
+or "column_count = 2". It wants simple answers: "does this document need its
+reading order rebuilt? yes/no". This file is the translator that produces those
+answers.
 
-Routing vs. downstream signals
-------------------------------
-Only three flags influence engine choice, and all three describe structural
-complexity a grid/flow-naive parser cannot reconstruct:
+Measured evidence goes in (text, tables, layout, visuals). A
+``DocumentRequirements`` object comes out — a small set of true/false flags. This
+is NOT the final engine choice; it just makes the document's needs explicit so
+the policy in ``engine_routing_policy.py`` can act on them.
 
-    needs_reading_order_reconstruction   multi-column or floating text layout
-    needs_complex_table_reconstruction   merged/nested/wide tables
-    needs_ocr_text_recovery              no usable native text layer
+Which needs actually affect the engine choice
+----------------------------------------------
+Only three of the flags can push a document toward MinerU, and each one
+describes structure that a simple, flow-by-flow reader would reconstruct wrongly:
 
-``needs_visual_asset_extraction`` and ``needs_visual_semantic_explanation`` are
-deliberately excluded from routing.  A figure that needs a prose summary is a
-Stage 3 (figure summarization) concern, not a reason to pick a heavier Stage 2
-layout engine.
+    needs_reading_order_reconstruction   text is not in one simple column
+    needs_complex_table_reconstruction   tables are merged / nested / very wide
+    needs_ocr_text_recovery              there is no real text layer to read
+
+Two more flags are computed here but deliberately do NOT affect routing:
+``needs_visual_asset_extraction`` and ``needs_visual_semantic_explanation``.
+A figure that should later get a written summary is a job for Stage 3, not a
+reason to choose a heavier conversion engine now. They are recorded so later
+stages can use them.
 """
 
 from __future__ import annotations
 
 from ...contracts.configurations.pipeline_config import EngineNeedsEvaluatorConfig
-from .models import (
+from ..feature_extraction.feature_evidence_models import (
     DocumentRequirements,
     LayoutEvidence,
     TableEvidence,
@@ -36,10 +41,10 @@ from .models import (
     VisualCandidateKind,
     VisualEvidence,
 )
-from .text_patterns import contains_figure_caption
+from ..feature_extraction.visual_caption_detector import contains_figure_caption
 
 
-def infer_requirements(
+def resolve_document_requirements(
     *,
     text: TextEvidence,
     tables: TableEvidence,
@@ -49,11 +54,15 @@ def infer_requirements(
     settings: EngineNeedsEvaluatorConfig | None = None,
 ) -> DocumentRequirements:
     """
-    Evaluate what processing capabilities the conversion engine must provide.
+    Work out what the conversion engine will need to handle this document.
 
-    ``settings`` comes from
-    ``document_feature_extraction.engine_needs_evaluator`` in ``settings.yaml``.
-    Defaults are used when no config is supplied.
+    Reads each kind of evidence and sets one plain true/false flag per need,
+    while also collecting a short human-readable note for every flag that turns
+    true (the ``rationale`` list), so the decision can be explained later.
+
+    The thresholds that decide "how wide is too wide for a table?" and similar
+    come from the ``engine_needs_evaluator`` section of ``settings.yaml``; sane
+    defaults are used when no config is passed in.
     """
     evaluator_settings = settings or EngineNeedsEvaluatorConfig()
     rationale: list[str] = []

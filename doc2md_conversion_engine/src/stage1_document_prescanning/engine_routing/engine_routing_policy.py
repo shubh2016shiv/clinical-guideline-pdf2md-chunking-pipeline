@@ -1,24 +1,37 @@
 """
-doc_feature_extraction/capability_router.py
-===========================================
-Capability-based engine routing from deterministic feature evidence.
+stage1_document_prescanning/engine_routing/engine_routing_policy.py
+===================================================================
+Stage 1 · Step 3 of 3 — the final engine decision.
 
-Routing philosophy
-------------------
-Docling is the default.  It is cheaper, faster, and sufficient for the majority
-of documents, and it reads semantically-encoded structure (DOCX styles, HTML
-tags, native text layers) directly.  MinerU is promoted only when deterministic
-evidence proves the document has structural complexity Docling cannot
-reconstruct correctly:
+This is the last thing Stage 1 does. Everything before it gathered facts; this
+file turns those facts into a single answer: "convert this document with Docling,
+or with MinerU?" It returns that answer together with a plain-English reason and
+a confidence number for the logs.
 
-    - multi-column layout or floating text boxes  (reading order)
-    - merged / nested / very wide tables          (grid reconstruction)
-    - no usable native text layer                 (scanned pages → OCR/layout)
+The rule it follows, in plain terms
+-----------------------------------
+Docling is the default choice. It is cheaper and faster, and it already
+understands documents that carry their structure inside them (Word styles, HTML
+tags, a real text layer). So a document stays with Docling UNLESS we can prove it
+has structure Docling would get wrong. We only switch to the heavier MinerU when
+the evidence shows one of three concrete problems:
 
-Absence of MinerU evidence is not ambiguity — it is a Docling confirmation.
-There is no probabilistic adjudicator in this path: every decision is a function
-of structural facts extracted in Stage 1, so the same document always routes the
-same way and the reason string names the exact signal that fired.
+    - the text does not flow in one straight column   → reading order is hard
+      (multiple columns, or free-floating text boxes)
+    - the tables are genuinely complicated             → the grid is hard
+      (merged cells, tables inside tables, very wide)
+    - there is no real text to read at all             → it must be recovered
+      (a scanned document, so OCR/layout work is needed)
+
+A key idea: "no evidence of a problem" is treated as a vote FOR Docling, not as
+uncertainty. We never drift to MinerU just because we are unsure.
+
+Why there is no AI model here
+-----------------------------
+The decision is computed entirely from the structural facts measured earlier, so
+the same document always lands on the same engine, the reason always names the
+exact signal that triggered the switch, and no document content is ever sent off
+to a model to decide.
 """
 
 from __future__ import annotations
@@ -33,7 +46,7 @@ from ...contracts.pipeline_domain_types import (
     ExtractionEngine,
     MinerUBackend,
 )
-from .models import DocumentFeatureProfile
+from ..feature_extraction.feature_evidence_models import DocumentFeatureProfile
 
 # Confidence = how reliable this routing decision is, for logging/observability.
 # Rule-based routing computes no probability, so these are fixed and ordered by
@@ -51,7 +64,7 @@ _CONFIDENCE_STRUCTURAL_PROMOTION = 0.90
 _CONFIDENCE_DOCLING_DEFAULT = 0.85
 
 
-class CapabilityBasedEngineRouter:
+class EngineRoutingPolicy:
     """
     Choose the cheapest sufficient structure engine from explicit capabilities.
 
@@ -64,7 +77,24 @@ class CapabilityBasedEngineRouter:
         self._routing_config = routing_config
 
     def route(self, profile: DocumentFeatureProfile) -> EngineClassification:
-        """Return an EngineClassification based on feature and capability evidence."""
+        """
+        Decide which engine converts this document, and say why.
+
+        The decision is made by asking four questions in order and stopping at
+        the first one that answers. Order matters — each question is more
+        specific than the one below it:
+
+            1. Did an operator force a specific engine in the config? If so, use
+               it (after checking that engine can actually open this format).
+            2. Does only ONE engine even support this file format? If so, there
+               is nothing to decide — use that one.
+            3. Is there hard structural evidence the document is hard to read?
+               If so, promote to MinerU and name the exact reason.
+            4. Otherwise, confirm Docling — nothing demands a heavier engine.
+
+        Returns an ``EngineClassification`` carrying the chosen engine, a
+        confidence value for the logs, and a human-readable reason.
+        """
         # Step 1: forced config override, with format compatibility validation.
         forced_classification = self._resolve_forced_classification_from_config()
         if forced_classification is not None:
@@ -108,7 +138,15 @@ class CapabilityBasedEngineRouter:
         )
 
     def _resolve_forced_classification_from_config(self) -> EngineClassification | None:
-        """Honor explicit conversion_engine overrides from settings.yaml."""
+        """
+        Check whether the operator has pinned an engine in ``settings.yaml``.
+
+        Sometimes a human wants to override the automatic choice (for testing, or
+        because they know something the signals don't). If ``conversion_engine``
+        is set to ``docling`` or ``mineru``, this returns that choice with full
+        confidence. If it is left on ``auto``, this returns ``None`` and the
+        normal evidence-based steps take over.
+        """
         if self._routing_config is None:
             return None
         forced = self._routing_config.conversion_engine
@@ -133,7 +171,14 @@ class CapabilityBasedEngineRouter:
         forced_classification: EngineClassification,
         profile: DocumentFeatureProfile,
     ) -> None:
-        """Raise when a forced engine cannot process this document format."""
+        """
+        Make sure a forced engine can actually open this document's format.
+
+        Forcing an engine skips the automatic choice, but it must not let someone
+        send, say, an HTML file to MinerU (which cannot read HTML). If the forced
+        engine does not support this format, we stop with a clear configuration
+        error instead of failing deep inside conversion later.
+        """
         format_support = profile.format_support
         if (
             forced_classification.engine == ExtractionEngine.DOCLING
@@ -163,10 +208,16 @@ class CapabilityBasedEngineRouter:
 
 def _structural_promotion_reason(profile: DocumentFeatureProfile) -> str | None:
     """
-    Return a human-readable reason to promote to MinerU, or None for Docling.
+    Look for a concrete reason to upgrade from Docling to MinerU.
 
-    Only structural complexity promotes.  Visual/figure signals are intentionally
-    excluded — they are a Stage 3 concern, not an engine-choice signal.
+    This checks the three "is it hard?" needs that were worked out earlier, in
+    order of how strongly they justify the heavier engine. It returns the first
+    matching reason as a sentence (which becomes the routing reason in the logs),
+    or ``None`` when none apply — meaning Docling is fine.
+
+    Note what is deliberately NOT here: having figures or charts does not promote
+    to MinerU. Explaining a figure is a later stage's job (Stage 3), not a reason
+    to pick a heavier layout engine now.
     """
     requirements = profile.requirements
     if requirements.needs_reading_order_reconstruction:
@@ -188,7 +239,14 @@ def _build_capability_routing_classification(
     confidence: float,
     reason: str,
 ) -> EngineClassification:
-    """Build an EngineClassification for capability-based routing."""
+    """
+    Package a routing decision into the standard result object.
+
+    A small helper so every one of the four decision branches above produces a
+    result the same way and cannot accidentally disagree on shape. The
+    ``complexity_score`` is fixed at zero on purpose: this policy decides by
+    rules, not by computing a numeric difficulty score.
+    """
     return EngineClassification(
         engine=engine,
         backend=backend,

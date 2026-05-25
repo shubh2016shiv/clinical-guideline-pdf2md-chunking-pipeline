@@ -1,18 +1,24 @@
 """
-doc_feature_extraction/feature_extraction_entry_point.py
-=========================================================
-Single public entry point for deterministic document feature extraction.
+stage1_document_prescanning/feature_extraction/document_feature_extractor.py
+============================================================================
+Stage 1 · Step 2 of 3 — the single front door to feature extraction.
 
-Callers hand in a document path and its type; this module hands back a
-``DocumentFeatureProfile``.  The fact that PDF, DOCX, PPTX, and HTML each
-have their own extractor module is an implementation detail hidden here.
+This is the one place the rest of the pipeline calls to learn what is inside a
+document. You hand it a file and its type; it hands back one
+``DocumentFeatureProfile``. The fact that PDFs, Word files, PowerPoint, and HTML
+each need a completely different reader is hidden behind this door — callers
+never have to know which reader ran.
 
-Constraint enforcement
-----------------------
-Page-count enforcement lives here because this is the first — and only —
-place the page count is known before Stage 2 work begins.  File-size
-enforcement lives in ``DocumentSHA256Hasher`` for the same reason: enforce
-at the earliest point the information is available.
+How it works is simple: it keeps a small lookup table from document type to the
+matching reader function, picks the right one, runs it, and returns the result.
+Adding a new format later means adding one reader and one entry in that table.
+
+Where document limits are enforced
+----------------------------------
+The page-count limit is checked here because this is the first moment in the
+whole pipeline where we actually know how many pages a document has. (The
+file-size limit is checked even earlier, while fingerprinting the file, for the
+same reason — enforce each limit at the first point its information exists.)
 """
 
 from __future__ import annotations
@@ -25,11 +31,11 @@ from ...contracts.configurations.pipeline_config import (
 )
 from ...contracts.exceptions import DocumentError, DocumentTooLargeError
 from ...contracts.pipeline_domain_types import DocumentType
-from .docx import extract_docx_features
-from .html import extract_html_features
-from .models import DocumentFeatureProfile
-from .pdf import extract_pdf_features
-from .pptx import extract_pptx_features
+from .feature_evidence_models import DocumentFeatureProfile
+from .format_extractors.docx_feature_extractor import extract_docx_features
+from .format_extractors.html_feature_extractor import extract_html_features
+from .format_extractors.pdf_feature_extractor import extract_pdf_features
+from .format_extractors.pptx_feature_extractor import extract_pptx_features
 
 # Maps each accepted document type to the function that extracts its features.
 # All extractor functions share the same signature:
@@ -42,7 +48,7 @@ FORMAT_EXTRACTORS = {
 }
 
 
-class DocumentFeatureExtractionEntryPoint:
+class DocumentFeatureExtractor:
     """
     Produce a ``DocumentFeatureProfile`` for any supported document format.
 
@@ -70,11 +76,16 @@ class DocumentFeatureExtractionEntryPoint:
 
     def extract(self, document_path: Path, document_type: DocumentType) -> DocumentFeatureProfile:
         """
-        Return the feature profile for *document_path* based on its *document_type*.
+        Look inside one document and return everything we measured about it.
+
+        Three steps: pick the reader that matches the document's type, run it to
+        get the feature profile, then check the document is not larger than the
+        configured page limit before letting it continue into expensive Stage 2
+        work.
 
         Raises:
-            DocumentError: Unsupported format.
-            DocumentTooLargeError: Page count exceeds ``constraints.max_pages``.
+            DocumentError: the format has no reader (we cannot process it).
+            DocumentTooLargeError: it has more pages than ``constraints.max_pages``.
         """
         extractor = FORMAT_EXTRACTORS.get(document_type)
         if extractor is None:

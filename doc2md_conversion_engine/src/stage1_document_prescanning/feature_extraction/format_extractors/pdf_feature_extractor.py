@@ -1,14 +1,28 @@
 """
-PDF feature extraction for engine routing.
+stage1_document_prescanning/feature_extraction/format_extractors/pdf_feature_extractor.py
+=========================================================================================
+Stage 1 · Step 2 of 3 — the reader for PDF files.
 
-This module does not try to understand the clinical meaning of a PDF.  It only
-collects factual evidence that is cheap to inspect:
+This module does not try to understand the clinical meaning of a PDF. It only
+collects cheap, factual evidence about its structure:
 
-1. Is there native text?
-2. Are there table-shaped regions?
+1. Is there real, selectable text — or just scanned images of text?
+2. Are there table-shaped regions, and how complex are they?
 3. Are there embedded images?
-4. Are there vector drawing-heavy pages?
-5. Which visual elements are worth showing to routing or local Ollama/Qwen?
+4. Are there pages heavy with vector drawings (lines, shapes)?
+5. Is the text laid out in multiple columns?
+6. Which visual elements are worth flagging for a later stage?
+
+How it works overall:
+    It opens the PDF once with PyMuPDF and walks it page by page, adding each
+    page's findings into one running tally (``PdfFeatureTotals``). After the last
+    page, it turns that tally into the final ``DocumentFeatureProfile``. Working
+    page-by-page keeps memory flat even for a long guideline.
+
+A note on multi-column detection: rather than trusting any single page, it looks
+at where text blocks start across all readable pages and only calls a document
+"multi-column" if a meaningful fraction of pages show two columns — so one stray
+appendix page cannot flip the whole document's routing.
 
 Thresholds come from ``settings.yaml`` via ``DocumentFeatureExtractionConfig``.
 """
@@ -22,15 +36,15 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from ...contracts.configurations.pipeline_config import (
+from ....contracts.configurations.pipeline_config import (
     DocumentFeatureExtractionConfig,
     EngineNeedsEvaluatorConfig,
     PDFFeatureExtractionConfig,
 )
-from ...contracts.exceptions import DocumentError
-from .engine_format_support import get_engine_format_support
-from .engine_needs_evaluator import infer_requirements
-from .models import (
+from ....contracts.exceptions import DocumentError
+from ...engine_routing.engine_format_compatibility import get_engine_format_compatibility
+from ...engine_routing.document_requirements_resolver import resolve_document_requirements
+from ..feature_evidence_models import (
     DocumentFeatureProfile,
     FeatureDocumentType,
     LayoutEvidence,
@@ -40,7 +54,7 @@ from .models import (
     VisualCandidateKind,
     VisualEvidence,
 )
-from .text_patterns import compact_text, contains_figure_caption, count_figure_caption_lines
+from ..visual_caption_detector import compact_text, contains_figure_caption, count_figure_caption_lines
 
 if TYPE_CHECKING:
     import fitz
@@ -332,7 +346,7 @@ def build_pdf_feature_profile(
         totals.visual_routing_candidates,
         max_candidates_to_keep=settings.max_visual_candidates,
     )
-    requirements = infer_requirements(
+    requirements = resolve_document_requirements(
         text=text_evidence,
         tables=table_evidence,
         layout=layout_evidence,
@@ -348,7 +362,7 @@ def build_pdf_feature_profile(
         layout=layout_evidence,
         visuals=visual_evidence,
         visual_candidates=strongest_visual_candidates,
-        format_support=get_engine_format_support(FeatureDocumentType.PDF),
+        format_support=get_engine_format_compatibility(FeatureDocumentType.PDF),
         requirements=requirements,
     )
 

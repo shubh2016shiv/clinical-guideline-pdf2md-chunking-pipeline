@@ -1,5 +1,7 @@
 """
-PPTX feature extraction for engine routing.
+stage1_document_prescanning/feature_extraction/format_extractors/pptx_feature_extractor.py
+==========================================================================================
+Stage 1 · Step 2 of 3 — the reader for PowerPoint (.pptx) files.
 
 This module does not try to understand the clinical meaning of a PowerPoint
 presentation.  It only collects factual evidence that is cheap to inspect:
@@ -38,15 +40,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ...contracts.configurations.pipeline_config import (
+from ....contracts.configurations.pipeline_config import (
     DocumentFeatureExtractionConfig,
     EngineNeedsEvaluatorConfig,
     PptxFeatureExtractionConfig,
 )
-from ...contracts.exceptions import DocumentError
-from .engine_format_support import get_engine_format_support
-from .engine_needs_evaluator import infer_requirements
-from .models import (
+from ....contracts.exceptions import DocumentError
+from ...engine_routing.engine_format_compatibility import get_engine_format_compatibility
+from ...engine_routing.document_requirements_resolver import resolve_document_requirements
+from ..feature_evidence_models import (
     DocumentFeatureProfile,
     FeatureDocumentType,
     LayoutEvidence,
@@ -56,7 +58,7 @@ from .models import (
     VisualCandidateKind,
     VisualEvidence,
 )
-from .text_patterns import compact_text, contains_figure_caption, count_figure_caption_lines
+from ..visual_caption_detector import compact_text, contains_figure_caption, count_figure_caption_lines
 
 logger = logging.getLogger(__name__)
 
@@ -438,9 +440,9 @@ def build_pptx_feature_profile(
     )
 
     # Capability flags — derived from evidence, not raw totals.
-    # infer_requirements encodes the routing heuristics so this function stays
+    # resolve_document_requirements encodes the routing heuristics so this function stays
     # focused on assembly.
-    requirements = infer_requirements(
+    requirements = resolve_document_requirements(
         text=text_evidence,
         tables=table_evidence,
         layout=layout_evidence,
@@ -457,7 +459,7 @@ def build_pptx_feature_profile(
         layout=layout_evidence,
         visuals=visual_evidence,
         visual_candidates=visual_candidates,
-        format_support=get_engine_format_support(FeatureDocumentType.PPTX),
+        format_support=get_engine_format_compatibility(FeatureDocumentType.PPTX),
         requirements=requirements,
     )
 

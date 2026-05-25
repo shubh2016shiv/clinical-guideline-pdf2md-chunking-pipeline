@@ -37,10 +37,10 @@ from pathlib import Path
 from .contracts.configurations.pipeline_config import PipelineConfig
 from .contracts.exceptions import DocumentError
 from .file_upload_management import DocumentUploadIntake, UploadedDocumentStagingStore
-from .stage1_document_prescanning import DocumentSHA256Hasher
-from .stage1_document_prescanning.doc_feature_extraction import (
-    CapabilityBasedEngineRouter,
-    DocumentFeatureExtractionEntryPoint,
+from .stage1_document_prescanning import (
+    DocumentFeatureExtractor,
+    DocumentSHA256Hasher,
+    EngineRoutingPolicy,
 )
 
 
@@ -79,11 +79,11 @@ class PipelineOrchestrator:
         self._intake = DocumentUploadIntake(config.document_constraints)
         self._hasher = DocumentSHA256Hasher(config.document_constraints)
         self._store = UploadedDocumentStagingStore(config.storage)
-        self._feature_extractor = DocumentFeatureExtractionEntryPoint(
+        self._feature_extractor = DocumentFeatureExtractor(
             feature_config=config.document_feature_extraction,
             constraints=config.document_constraints,
         )
-        self._router = CapabilityBasedEngineRouter(config.engine_routing)
+        self._router = EngineRoutingPolicy(config.engine_routing)
 
     # ------------------------------------------------------------------
     # Public API

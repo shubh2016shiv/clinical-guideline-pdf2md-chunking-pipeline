@@ -1,7 +1,10 @@
 """
-stage1_document_prescanning/document_sha256_hasher.py
-======================================================
-Module 1 of Stage 1: fingerprint the source document and sniff its type.
+stage1_document_prescanning/document_identity/document_sha256_hasher.py
+=======================================================================
+Stage 1 · Step 1 of 3 — fingerprint the document and work out its type.
+
+This is the very first thing that happens to a document. Before we look inside
+it or decide anything, we give it a stable name and confirm we can handle it.
 
 Responsibilities
 ----------------
@@ -29,14 +32,14 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..contracts.configurations.pipeline_config import DocumentConstraintsConfig
-from ..contracts.document_format_constants import (
+from ...contracts.configurations.pipeline_config import DocumentConstraintsConfig
+from ...contracts.document_format_constants import (
     EXTENSION_TO_TYPE,
     MAGIC_READ_BYTES,
     MAGIC_SIGNATURES,
 )
-from ..contracts.exceptions import DocumentError, DocumentTooLargeError
-from ..contracts.pipeline_domain_types import DocumentType
+from ...contracts.exceptions import DocumentError, DocumentTooLargeError
+from ...contracts.pipeline_domain_types import DocumentType
 
 # Read the file in 1 MB chunks so peak RAM stays bounded at ~1 MB regardless
 # of how large the source document is (200 MB PPTX, 50 MB image-heavy PDF, etc.)
