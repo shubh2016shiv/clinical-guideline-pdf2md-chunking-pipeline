@@ -30,8 +30,8 @@ Typical usage
 """
 
 from .context_assembly import build_routing_user_message
-from .engine_routing_agent import EngineRoutingAgent
-from .ollama_routing_client import OllamaClient
+from .routing_agent import EngineRoutingAgent
+from .ollama_client import OllamaClient
 from .system_prompt import REQUIRED_OUTPUT_SCHEMA, SYSTEM_MESSAGE
 
 __all__ = [

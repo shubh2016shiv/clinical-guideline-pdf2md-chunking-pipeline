@@ -1,5 +1,5 @@
 """
-engine_routing_ollama_client.py
+ollama_client.py
 ========================
 Pure HTTP client for a local Ollama model.
 
@@ -25,7 +25,7 @@ What does NOT belong here
 --------------------------
 - Prompt construction.          → ``system_prompt.py``
 - Feature evidence packaging.   → ``feature_message_builder.py``
-- Decision parsing/validation.  → ``engine_routing_agent.py``
+- Decision parsing/validation.  → ``routing_agent.py``
 
 Why stdlib HTTP?
 ----------------

@@ -1,5 +1,5 @@
 """
-engine_routing_agent.py
+routing_agent.py
 =======================
 Orchestrates the full engine routing decision for one document.
 
@@ -41,7 +41,7 @@ from ..doc_feature_extraction.models import (
     OllamaVisualRoutingDecision,
 )
 from .context_assembly import build_routing_user_message
-from .engine_routing_ollama_client import OllamaClient
+from .ollama_client import OllamaClient
 from .system_prompt import SYSTEM_MESSAGE
 
 
