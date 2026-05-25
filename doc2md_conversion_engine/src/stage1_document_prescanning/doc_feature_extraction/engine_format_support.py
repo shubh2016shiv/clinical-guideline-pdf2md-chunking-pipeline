@@ -3,24 +3,32 @@ doc_feature_extraction/engine_format_support.py
 ================================================
 Declares which document formats each conversion engine supports.
 
-``DOCLING_SUPPORTED_FORMATS`` is derived from the authoritative extension map
-in ``document_format_constants.py`` — adding a new format there automatically
-includes it here.  ``MINERU_SUPPORTED_FORMATS`` is declared explicitly because
-it reflects an engine constraint (no HTML), not just a recognised extension.
+Both constants are intentionally explicit, independent declarations.  They
+must NOT be derived from ``document_format_constants.EXTENSION_TO_TYPE``.
+
+``EXTENSION_TO_TYPE`` answers: "which file extensions does the intake layer
+recognise?"  That is a different question from "which formats can this engine
+process?"  Deriving one from the other couples intake recognition to engine
+capability — adding a new extension for intake purposes (e.g. to give a
+cleaner rejection message for an unsupported format) would silently alter
+engine routing without any engine actually gaining that capability.
+
+Adding a new format here is a deliberate, separate act from adding it to the
+intake layer.  Both should be updated consciously, but neither should imply
+the other.
 """
 
 from __future__ import annotations
 
-from ...contracts.document_format_constants import EXTENSION_TO_TYPE
 from .models import EngineFormatSupport, FeatureDocumentType
 
-# All formats Docling handles — derived from the authoritative extension map so
-# that adding a new format to EXTENSION_TO_TYPE automatically adds it here.
-DOCLING_SUPPORTED_FORMATS: frozenset[str] = frozenset(doc_type.value for doc_type in EXTENSION_TO_TYPE.values())
+# Docling supports all four formats accepted by this pipeline.
+# Declared explicitly — not derived from EXTENSION_TO_TYPE — so that
+# extending the intake layer does not silently change routing support.
+DOCLING_SUPPORTED_FORMATS: frozenset[str] = frozenset({"pdf", "docx", "pptx", "html"})
 
-# MinerU does not support HTML; this is an explicit capability declaration and
-# cannot be derived from EXTENSION_TO_TYPE — it reflects an engine constraint,
-# not just the presence of a recognised extension.
+# MinerU does not support HTML.  Declared explicitly for the same reason as
+# above: engine capability is a separate concern from intake recognition.
 MINERU_SUPPORTED_FORMATS: frozenset[str] = frozenset({"pdf", "docx", "pptx"})
 
 

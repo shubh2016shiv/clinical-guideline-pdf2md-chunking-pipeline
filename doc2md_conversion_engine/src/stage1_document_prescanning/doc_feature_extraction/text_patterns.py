@@ -9,7 +9,6 @@ from __future__ import annotations
 import re
 
 _FIGURE_CAPTION_RE = re.compile(r"\b(fig(?:ure)?|chart|diagram|flowchart)\s*[\.:]?\s*\d*", re.I)
-_TABLE_CAPTION_RE = re.compile(r"\btable\s*[\.:]?\s*\d*", re.I)
 
 
 def compact_text(value: str | None, *, limit: int = 240) -> str | None:
@@ -25,11 +24,6 @@ def compact_text(value: str | None, *, limit: int = 240) -> str | None:
 def contains_figure_caption(text: str | None) -> bool:
     """Return True when text looks like a figure/chart/diagram caption."""
     return bool(text and _FIGURE_CAPTION_RE.search(text))
-
-
-def contains_table_caption(text: str | None) -> bool:
-    """Return True when text looks like a table caption."""
-    return bool(text and _TABLE_CAPTION_RE.search(text))
 
 
 def count_figure_caption_lines(text: str) -> int:

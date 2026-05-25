@@ -49,6 +49,7 @@ from .engine_needs_evaluator import infer_requirements
 from .models import (
     DocumentFeatureProfile,
     FeatureDocumentType,
+    LayoutEvidence,
     TableEvidence,
     TextEvidence,
     VisualCandidate,
@@ -68,6 +69,8 @@ class PptxFeatureTotals:
     slide_numbers_with_text: set[int] = field(default_factory=set)
 
     number_of_tables: int = 0
+    max_table_column_count: int = 0
+    has_merged_cells: bool = False
     slide_numbers_with_tables: set[int] = field(default_factory=set)
 
     number_of_images: int = 0
@@ -219,11 +222,12 @@ def collect_table_from_shape(
     ctx: PptxSlideContext,
     totals: PptxFeatureTotals,
 ) -> None:
-    """Step 2b: Record a table shape and emit a visual candidate for it."""
+    """Step 2b: Record a table shape, read its structure, emit a candidate."""
     if not getattr(shape, "has_table", False):
         return
     totals.number_of_tables += 1
     totals.slide_numbers_with_tables.add(ctx.slide_number)
+    _read_table_structure(shape.table, totals)
     totals.visual_routing_candidates.append(
         VisualCandidate(
             kind=VisualCandidateKind.TABLE,
@@ -233,6 +237,35 @@ def collect_table_from_shape(
             evidence=["PowerPoint table shape"],
         )
     )
+
+
+def _read_table_structure(table: Any, totals: PptxFeatureTotals) -> None:
+    """
+    Update document-wide table structure from one PowerPoint table.
+
+    ``len(table.columns)`` is the grid column count.  ``cell.is_merge_origin``
+    marks the top-left cell of a merged region — its presence anywhere means the
+    table has merged cells.  Both are read defensively so a python-pptx version
+    change degrades to "no extra signal" rather than raising.  PPTX tables cannot
+    nest, so ``has_nested_tables`` is never set for this format.
+    """
+    try:
+        totals.max_table_column_count = max(
+            totals.max_table_column_count, len(table.columns)
+        )
+    except Exception:
+        logger.debug("Could not read PPTX table column count; skipping")
+
+    if totals.has_merged_cells:
+        return
+    try:
+        for row in table.rows:
+            for cell in row.cells:
+                if getattr(cell, "is_merge_origin", False):
+                    totals.has_merged_cells = True
+                    return
+    except Exception:
+        logger.debug("Could not inspect PPTX table cells for merges; skipping")
 
 
 def collect_chart_from_shape(
@@ -394,6 +427,7 @@ def build_pptx_feature_profile(
     # Aggregate statistics — one object per feature dimension.
     text_evidence = build_text_evidence(totals, total_slides)
     table_evidence = build_table_evidence(totals)
+    layout_evidence = build_layout_evidence()
     visual_evidence = build_visual_evidence(totals)
 
     # Representative examples — ranked by importance, capped so the downstream
@@ -409,6 +443,7 @@ def build_pptx_feature_profile(
     requirements = infer_requirements(
         text=text_evidence,
         tables=table_evidence,
+        layout=layout_evidence,
         visuals=visual_evidence,
         visual_candidates=visual_candidates,
         settings=evaluator_settings,
@@ -419,6 +454,7 @@ def build_pptx_feature_profile(
         page_or_unit_count=total_slides,
         text=text_evidence,
         tables=table_evidence,
+        layout=layout_evidence,
         visuals=visual_evidence,
         visual_candidates=visual_candidates,
         format_support=get_engine_format_support(FeatureDocumentType.PPTX),
@@ -444,7 +480,24 @@ def build_table_evidence(totals: PptxFeatureTotals) -> TableEvidence:
         # PPTX stores no semantic size metadata for table shapes beyond their EMU
         # dimensions.  A large/small split is not reliable at this extraction stage.
         large_count=0,
+        # Structure is read directly from the table grid XML.
+        max_column_count=totals.max_table_column_count,
+        has_merged_cells=totals.has_merged_cells,
+        # PowerPoint tables cannot contain nested tables.
+        has_nested_tables=False,
     )
+
+
+def build_layout_evidence() -> LayoutEvidence:
+    """
+    Summarize layout evidence for the presentation.
+
+    A slide is a free-form canvas, not a flowing text column: multi-column and
+    floating-text-box signals do not apply, so both stay at their single-column
+    defaults.  Reading-order difficulty in PPTX, when present, surfaces through
+    diagram-heavy slide clusters (a Stage 3 visual signal), not layout columns.
+    """
+    return LayoutEvidence(column_count=1, has_floating_text_boxes=False)
 
 
 def build_visual_evidence(totals: PptxFeatureTotals) -> VisualEvidence:

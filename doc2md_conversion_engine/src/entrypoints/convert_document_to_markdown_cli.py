@@ -24,7 +24,7 @@ from pathlib import Path
 from doc2md_conversion_engine.src.contracts.configurations.pipeline_config import (
     PipelineConfig,
 )
-from doc2md_conversion_engine.src.contracts.exceptions import DocumentError
+from doc2md_conversion_engine.src.contracts.exceptions import PipelineError
 from doc2md_conversion_engine.src.pipeline_orchestrator import (
     PipelineOrchestrator,
     Stage1Result,
@@ -63,12 +63,6 @@ def _print_result(result: Stage1Result) -> None:
     print(f"      {'Features:':<18s} {result.feature_summary}")
     if result.inferred_requirements:
         print(f"      {'Requirements:':<18s} {'; '.join(result.inferred_requirements)}")
-    if result.ollama_payload:
-        candidates = result.ollama_payload.get("visual_candidates_requiring_explanation") or []
-        candidate_count = len(candidates) if isinstance(candidates, list) else 0
-        engine_rec = result.ollama_payload.get("recommended_structure_engine", "—")
-        confidence = result.ollama_payload.get("confidence", 0.0)
-        print(f"      {'Ollama decision:':<18s} {engine_rec}  (confidence: {confidence:.0%},  {candidate_count} candidate(s) flagged)")
     print(f"      {'Time:':<18s} {result.elapsed_ms:.0f} ms")
     print(f"      {'Output:':<18s} {result.output_dir}")
 
@@ -124,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     _status("🔍", f"Scanning: {root}")
     try:
         paths = orchestrator.collect_documents(root, recursive=args.recursive)
-    except DocumentError as exc:
+    except PipelineError as exc:
         print(f"\n  ✗  {exc}", file=sys.stderr)
         return 1
 
@@ -143,7 +137,10 @@ def main(argv: list[str] | None = None) -> int:
         _bar(f"[{i}/{len(paths)}]  {doc_path.name}")
         try:
             result = orchestrator.run_stage1(doc_path)
-        except DocumentError as exc:
+        except PipelineError as exc:
+            # Broad domain safety net: a bad document, an unsupported forced-engine
+            # /format combination (ConfigurationError), or any other pipeline failure
+            # is reported per-document and the run continues with the rest.
             _status("⛔", str(exc))
             errors.append((doc_path.name, str(exc)))
             continue

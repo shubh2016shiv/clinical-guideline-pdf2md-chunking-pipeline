@@ -18,18 +18,17 @@ questions:
 
 3. **Which engine should process it?**
    ``CapabilityBasedEngineRouter`` chooses the cheapest sufficient engine
-   from the extracted requirements.  For documents with meaningful visuals,
-   ``EngineRoutingAgent`` asks a local Ollama model to adjudicate before the
-   final decision is made.
+   deterministically from the extracted structural requirements: it promotes to
+   MinerU only on hard evidence (multi-column layout, complex tables, missing
+   text layer) and otherwise confirms Docling.
 
-Why no threshold-based complexity scoring?
-------------------------------------------
-Earlier versions used ``DocumentPageStructureScanner`` + ``DocumentComplexityClassifier``
-to score documents against hand-tuned numeric thresholds.  This approach is
-not scalable: thresholds that work for simple clinical guidelines break on
-research papers, multi-column PDFs, or any document type outside the calibration
-set.  A local VLM (``EngineRoutingAgent``) generalises across the full spectrum
-of document complexity without requiring manual threshold maintenance.
+Why deterministic routing instead of a model?
+----------------------------------------------
+Routing is decided entirely from structural facts extracted in Stage 1, so the
+same document always routes the same way, the reason names the exact signal that
+fired, and no patient data leaves the process for an inference call.  The
+signals (XML structure, table geometry, text-block layout) are cheap to read in
+the same pass that already extracts feature evidence.
 """
 
 from .doc_feature_extraction import (
@@ -38,16 +37,13 @@ from .doc_feature_extraction import (
     DocumentFeatureProfile,
 )
 from .document_sha256_hasher import DocumentHashResult, DocumentSHA256Hasher
-from .engine_decision_router import EngineRoutingAgent
 
 __all__ = [
     # Hasher
     "DocumentSHA256Hasher",
     "DocumentHashResult",
-    # Feature extraction
+    # Feature extraction + deterministic routing
     "CapabilityBasedEngineRouter",
     "DocumentFeatureExtractionEntryPoint",
     "DocumentFeatureProfile",
-    # Engine routing
-    "EngineRoutingAgent",
 ]

@@ -16,7 +16,9 @@ Thresholds come from ``settings.yaml`` via ``DocumentFeatureExtractionConfig``.
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -31,6 +33,7 @@ from .engine_needs_evaluator import infer_requirements
 from .models import (
     DocumentFeatureProfile,
     FeatureDocumentType,
+    LayoutEvidence,
     TableEvidence,
     TextEvidence,
     VisualCandidate,
@@ -55,7 +58,14 @@ class PdfFeatureTotals:
 
     table_count: int = 0
     large_table_count: int = 0
+    max_table_column_count: int = 0
     page_numbers_with_tables: set[int] = field(default_factory=set)
+
+    # Layout: a document is multi-column only when a sufficient *fraction* of its
+    # judgeable pages are two-column — one or two stray pages must not flip it.
+    # Pages too sparse to judge are excluded from the denominator entirely.
+    multi_column_page_count: int = 0
+    column_judged_page_count: int = 0
 
     embedded_image_count: int = 0
     large_embedded_image_count: int = 0
@@ -92,6 +102,10 @@ def extract_pdf_features(
             totals=feature_totals,
         )
 
+    # Surface any non-fatal MuPDF parser warnings with document attribution
+    # instead of leaving them as anonymous stderr noise.
+    _drain_mupdf_warnings(path)
+
     logger.debug(
         "PDF feature extraction complete: path=%s pages=%d chars=%d tables=%d images=%d",
         path.name,
@@ -123,9 +137,10 @@ def scan_one_pdf_page(
     Step 2: read text and page size.
     Step 3: find nearby figure-caption context.
     Step 4: collect text evidence.
-    Step 5: collect table evidence.
-    Step 6: collect embedded-image evidence.
-    Step 7: collect vector-drawing evidence.
+    Step 5: collect layout (column) evidence.
+    Step 6: collect table evidence.
+    Step 7: collect embedded-image evidence.
+    Step 8: collect vector-drawing evidence.
     """
     page = load_pdf_page_by_number(pdf_document, page_number)
     page_text = read_page_text(page)
@@ -135,6 +150,7 @@ def scan_one_pdf_page(
     totals.total_page_area += page_area
 
     collect_text_evidence_from_page(page_number, page_text, totals)
+    collect_layout_evidence_from_page(page=page, settings=settings, totals=totals)
     collect_table_evidence_from_page(
         page_number=page_number,
         page=page,
@@ -191,15 +207,24 @@ def collect_table_evidence_from_page(
     settings: PDFFeatureExtractionConfig,
     totals: PdfFeatureTotals,
 ) -> None:
-    """Add table-box evidence from one page."""
-    table_boxes = find_table_boxes_on_page(page)
-    if not table_boxes:
+    """Add table-box evidence from one page, including structural width."""
+    detected_tables = find_tables_on_page(page)
+    if not detected_tables:
         return
 
-    totals.table_count += len(table_boxes)
+    totals.table_count += len(detected_tables)
     totals.page_numbers_with_tables.add(page_number)
 
-    for table_box in table_boxes:
+    for detected_table in detected_tables:
+        table_box = getattr(detected_table, "bbox", None)
+        if table_box is None:
+            continue
+
+        totals.max_table_column_count = max(
+            totals.max_table_column_count,
+            read_table_column_count(detected_table),
+        )
+
         page_area_fraction = calculate_page_area_fraction(table_box, page_area)
         if (
             page_area_fraction is not None
@@ -301,6 +326,7 @@ def build_pdf_feature_profile(
     """Build the public PDF feature profile from collected evidence."""
     text_evidence = build_text_evidence(totals)
     table_evidence = build_table_evidence(totals)
+    layout_evidence = build_layout_evidence(totals, settings)
     visual_evidence = build_visual_evidence(totals)
     strongest_visual_candidates = choose_visual_candidates_for_routing(
         totals.visual_routing_candidates,
@@ -309,6 +335,7 @@ def build_pdf_feature_profile(
     requirements = infer_requirements(
         text=text_evidence,
         tables=table_evidence,
+        layout=layout_evidence,
         visuals=visual_evidence,
         visual_candidates=strongest_visual_candidates,
         settings=evaluator_settings,
@@ -318,6 +345,7 @@ def build_pdf_feature_profile(
         page_or_unit_count=total_pages,
         text=text_evidence,
         tables=table_evidence,
+        layout=layout_evidence,
         visuals=visual_evidence,
         visual_candidates=strongest_visual_candidates,
         format_support=get_engine_format_support(FeatureDocumentType.PDF),
@@ -341,6 +369,36 @@ def build_table_evidence(totals: PdfFeatureTotals) -> TableEvidence:
         count=totals.table_count,
         pages_or_units_with_tables=len(totals.page_numbers_with_tables),
         large_count=totals.large_table_count,
+        max_column_count=totals.max_table_column_count,
+        # Merged/nested cells are not reliably detectable from PyMuPDF without
+        # rendering; left at the default rather than guessed.
+        has_merged_cells=False,
+        has_nested_tables=False,
+    )
+
+
+def build_layout_evidence(
+    totals: PdfFeatureTotals,
+    settings: PDFFeatureExtractionConfig,
+) -> LayoutEvidence:
+    """
+    Summarize page-layout evidence across the PDF.
+
+    The document is two-column only when the share of judgeable pages that are
+    two-column reaches ``multi_column_doc_page_fraction``.  This rejects the
+    common case of a single-column guideline with a few two-column reference or
+    appendix pages, while still catching genuinely two-column journal articles.
+    """
+    is_multi_column = (
+        totals.column_judged_page_count > 0
+        and (totals.multi_column_page_count / totals.column_judged_page_count)
+        >= settings.multi_column_doc_page_fraction
+    )
+    return LayoutEvidence(
+        column_count=2 if is_multi_column else 1,
+        # PDF has no explicit floating-text-box concept; overlap detection would
+        # require rendering, so this stays at the default.
+        has_floating_text_boxes=False,
     )
 
 
@@ -397,20 +455,107 @@ def find_first_figure_caption_line(page_text: str) -> str | None:
     return None
 
 
-def find_table_boxes_on_page(page: fitz.Page) -> list[object]:
-    """Return table bounding boxes found by PyMuPDF, or an empty list."""
+def find_tables_on_page(page: fitz.Page) -> list[object]:
+    """Return the PyMuPDF table objects found on a page, or an empty list."""
     try:
         table_detection_result = page.find_tables()
     except Exception:
         logger.debug("page.find_tables() failed or is unavailable; skipping table detection")
         return []
+    return list(getattr(table_detection_result, "tables", []) or [])
 
-    detected_tables = getattr(table_detection_result, "tables", []) or []
-    return [
-        detected_table.bbox
-        for detected_table in detected_tables
-        if getattr(detected_table, "bbox", None) is not None
-    ]
+
+def read_table_column_count(detected_table: object) -> int:
+    """
+    Return a detected table's column count, or 0 when not determinable.
+
+    PyMuPDF exposes ``col_count`` on recent versions; older builds expose a
+    ``cols`` list.  We read defensively so a library change degrades to 0
+    (no signal) rather than raising.  Merged/nested cells are NOT reliably
+    detectable from PyMuPDF without rendering, so those structural flags stay
+    at their defaults for PDF — the same honesty contract used elsewhere.
+    """
+    column_count = getattr(detected_table, "col_count", None)
+    if isinstance(column_count, int) and column_count > 0:
+        return column_count
+    cols = getattr(detected_table, "cols", None)
+    return len(cols) if isinstance(cols, (list, tuple)) else 0
+
+
+def collect_layout_evidence_from_page(
+    *,
+    page: fitz.Page,
+    settings: PDFFeatureExtractionConfig,
+    totals: PdfFeatureTotals,
+) -> None:
+    """
+    Classify one page as two-column or not and update the document tallies.
+
+    Pages too sparse to judge are skipped entirely (neither counted as judged nor
+    as multi-column), so they cannot drag the document-level verdict either way.
+    """
+    page_is_multi_column = classify_page_is_multi_column(
+        read_text_block_left_edges(page),
+        page_width=float(page.rect.width),
+        gutter_ratio=settings.multi_column_gutter_ratio,
+        min_text_blocks=settings.multi_column_min_text_blocks,
+        right_band_fraction=settings.multi_column_right_band_fraction,
+    )
+    if page_is_multi_column is None:
+        return
+    totals.column_judged_page_count += 1
+    if page_is_multi_column:
+        totals.multi_column_page_count += 1
+
+
+def read_text_block_left_edges(page: fitz.Page) -> list[float]:
+    """
+    Return the left x-coordinate of every text block on the page.
+
+    ``page.get_text("blocks")`` yields tuples of
+    ``(x0, y0, x1, y1, text, block_no, block_type)`` where ``block_type == 0``
+    marks a text block.  Reading only the left edge is far cheaper than the full
+    ``"dict"`` structure and is all the column detector needs.
+    """
+    try:
+        blocks = page.get_text("blocks") or []
+    except Exception:
+        logger.debug("page.get_text('blocks') failed; skipping column detection")
+        return []
+    return [float(block[0]) for block in blocks if len(block) >= 7 and block[6] == 0]
+
+
+def classify_page_is_multi_column(
+    left_edges: list[float],
+    *,
+    page_width: float,
+    gutter_ratio: float,
+    min_text_blocks: int,
+    right_band_fraction: float,
+) -> bool | None:
+    """
+    Classify a page's column layout: True (two-column), False (single), or None.
+
+    A two-column page places a meaningful share of its text blocks to the right
+    of a vertical gutter (``gutter_ratio`` of the page width, typically the
+    midline) while still having blocks to its left.  The 1-vs-2 question is the
+    only distinction that matters for routing — two columns already require
+    reading-order reconstruction.
+
+    Returns ``None`` when the page has fewer than ``min_text_blocks`` text blocks:
+    sparse pages (title, references, figure-only) carry too little signal to judge
+    and must not influence the document-level verdict.
+    """
+    if page_width <= 0 or len(left_edges) < min_text_blocks:
+        return None
+
+    gutter_x = gutter_ratio * page_width
+    blocks_right_of_gutter = sum(1 for x in left_edges if x > gutter_x)
+    blocks_left_of_gutter = len(left_edges) - blocks_right_of_gutter
+    if blocks_left_of_gutter == 0 or blocks_right_of_gutter == 0:
+        return False
+
+    return (blocks_right_of_gutter / len(left_edges)) >= right_band_fraction
 
 
 def open_pdf_with_pymupdf(path: Path) -> fitz.Document:
@@ -423,6 +568,8 @@ def open_pdf_with_pymupdf(path: Path) -> fitz.Document:
             context={"path": str(path)},
         ) from exc
 
+    _configure_mupdf_error_handling()
+
     try:
         return fitz.open(str(path))
     except Exception as exc:
@@ -430,6 +577,65 @@ def open_pdf_with_pymupdf(path: Path) -> fitz.Document:
             f"Failed to open PDF for feature extraction: {path.name}",
             context={"path": str(path)},
         ) from exc
+
+
+@lru_cache(maxsize=1)
+def _configure_mupdf_error_handling() -> None:
+    """
+    Disable MuPDF's direct-to-stderr warning printing — once per process.
+
+    Malformed PDFs make MuPDF's C layer print messages like
+    ``format error: No common ancestor in structure tree`` straight to stderr,
+    where they look like fatal failures and cannot be attributed to a document.
+    Silencing the direct display lets ``_drain_mupdf_warnings`` surface them
+    afterwards through our own logger with the document name attached.
+
+    Library-wide display configuration is a process-level concern, not a
+    per-document one, so ``lru_cache`` runs this exactly once rather than on
+    every PDF open.  Guarded so a PyMuPDF API change degrades to the library
+    default instead of raising.
+    """
+    try:
+        import fitz  # noqa: PLC0415
+
+        fitz.TOOLS.mupdf_display_errors(False)  # type: ignore[attr-defined]
+    except Exception:
+        logger.debug("Could not disable MuPDF direct stderr; leaving library default")
+
+
+def _drain_mupdf_warnings(path: Path) -> None:
+    """
+    Log any MuPDF warnings accumulated while scanning *path*, then reset the store.
+
+    These are non-fatal: the document still produced a feature profile.  Logging
+    them at WARNING with the document name turns anonymous stderr noise into an
+    attributable, structured signal an operator can act on.
+    """
+    try:
+        import fitz  # noqa: PLC0415
+
+        # mupdf_warnings() returns the accumulated text and clears the store.
+        accumulated = fitz.TOOLS.mupdf_warnings()  # type: ignore[attr-defined]
+    except Exception:
+        return
+
+    distinct_warnings = Counter(
+        line.strip() for line in accumulated.splitlines() if line.strip()
+    )
+    if not distinct_warnings:
+        return
+
+    # Malformed PDFs repeat the same warning per page; collapse duplicates to a
+    # count so one broken structure tree is one log line, not dozens.
+    summary = "; ".join(
+        f"{message} (x{count})" if count > 1 else message
+        for message, count in distinct_warnings.items()
+    )
+    logger.warning(
+        "PyMuPDF reported non-fatal issues while scanning %s: %s",
+        path.name,
+        summary,
+    )
 
 
 def get_page_area(page: fitz.Page) -> float:

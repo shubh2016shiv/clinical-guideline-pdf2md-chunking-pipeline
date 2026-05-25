@@ -47,6 +47,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
+from typing import ClassVar
 
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import (
@@ -174,13 +175,54 @@ class PDFFeatureExtractionConfig(BaseModel):
             "noise from decorative lines, borders, and bullets."
         ),
     )
+    multi_column_gutter_ratio: float = Field(
+        default=0.5,
+        gt=0.0,
+        lt=1.0,
+        description=(
+            "Fraction of page width marking the vertical gutter between columns. A page is "
+            "multi-column when a meaningful share of text blocks start to the right of this "
+            "line while others start to its left. 0.5 = page midline (the common 2-column case)."
+        ),
+    )
+    multi_column_min_text_blocks: int = Field(
+        default=8,
+        ge=1,
+        description=(
+            "Minimum text blocks on a page before its column layout is judged. Sparse pages "
+            "(title, references, figure-only) are left undetermined rather than guessed, so "
+            "they neither trigger nor suppress the document-level multi-column verdict."
+        ),
+    )
+    multi_column_right_band_fraction: float = Field(
+        default=0.30,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "Per-page threshold: share of text blocks that must start right of the gutter "
+            "(with others to its left) for the page to count as two-column. Raise to reduce "
+            "false positives from right-aligned headers, page numbers, or marginal notes."
+        ),
+    )
+    multi_column_doc_page_fraction: float = Field(
+        default=0.30,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "Document-level threshold: share of judgeable pages that must be two-column before "
+            "the whole document is treated as multi-column. Prevents a handful of two-column "
+            "appendix or reference pages from promoting an otherwise single-column document. "
+            "Calibrated against a clinical-guideline corpus (single-column ~0.05, genuinely "
+            "two-column journals ~0.43-0.93)."
+        ),
+    )
     max_visual_candidates: int = Field(
         default=10,
         ge=1,
         le=50,
         description=(
-            "Maximum PDF visual candidates retained after ranking. Ollama/Qwen receives at "
-            "most a further subset from the payload builder."
+            "Maximum PDF visual candidates retained after ranking, used for downstream "
+            "figure-summarization review and routing diagnostics."
         ),
     )
 
@@ -293,16 +335,28 @@ class HtmlFeatureExtractionConfig(BaseModel):
 
 class EngineNeedsEvaluatorConfig(BaseModel):
     """
-    Thresholds that control how extracted visual candidates are judged for VLM routing.
+    Thresholds that turn raw evidence into capability requirements.
 
-    After feature extraction, every image/chart/SVG is a *candidate*.  Not all
-    candidates are worth routing to a vision model — tiny logos, bullet icons, and
-    decorative dividers would generate noise.  These two thresholds implement the
-    filter: a candidate is skipped only when it is *both* small *and* labelled
-    with a term that strongly suggests decoration.  Either condition alone is not
-    enough to skip — a large image labelled "logo" may still carry clinical content.
+    ``wide_table_max_simple_columns`` is a routing threshold: a table wider than
+    this is treated as structurally complex (column alignment degrades in a
+    grid-naive parser) and promotes to a layout-aware engine.
+
+    The remaining thresholds judge whether a visual candidate is meaningful
+    enough to flag for Stage 3 figure summarization.  A candidate is skipped only
+    when it is *both* small *and* labelled with a decorative term — either
+    condition alone is not enough, since a large image labelled "logo" may still
+    carry clinical content.
     """
 
+    wide_table_max_simple_columns: int = Field(
+        default=6,
+        ge=1,
+        description=(
+            "A table with more columns than this is treated as structurally complex and "
+            "promotes to a layout-aware engine. Typical range: 5-8. Lower is more eager to "
+            "promote wide tables to MinerU; higher keeps more tables on Docling."
+        ),
+    )
     meaningful_visual_area_ratio: float = Field(
         default=0.05,
         ge=0.0,
@@ -344,8 +398,8 @@ class ConversionEngineChoice(StrEnum):
     How the pipeline selects a conversion engine.
 
     AUTO
-        Run the complexity classifier (Stage 1) and route to the best engine.
-        Recommended for production.
+        Route deterministically from Stage 1 structural evidence (layout columns,
+        table complexity, native text layer).  Recommended for production.
     MINERU
         Always use MinerU, regardless of document complexity.
     DOCLING
@@ -357,48 +411,6 @@ class ConversionEngineChoice(StrEnum):
     DOCLING = "docling"
 
 
-class OllamaClientConfig(BaseModel):
-    """
-    Connection settings for the local Ollama server used in engine routing.
-
-    Ollama runs locally so that routing decisions never send patient data to an
-    external API.  These values must match how ``ollama serve`` was started on
-    this machine.
-
-    Settings key: ``engine_routing.ollama_client``
-    """
-
-    base_url: str = Field(
-        default="http://127.0.0.1:11434",
-        description="Root URL of the local Ollama HTTP server.",
-    )
-    model: str = Field(
-        default="qwen3.5:4b",
-        description=(
-            "Ollama model tag.  Must support JSON output mode "
-            "(format: json in the API request)."
-        ),
-    )
-    timeout_seconds: float = Field(
-        default=600.0,
-        gt=0.0,
-        description=(
-            "Seconds to wait for Ollama before raising an error.  "
-            "10 minutes by default — reasoning models running on local hardware "
-            "need time to think through complex visual routing decisions."
-        ),
-    )
-    max_candidates: int = Field(
-        default=5,
-        ge=1,
-        description=(
-            "Maximum number of visual candidates sent to the Ollama model per "
-            "document.  Candidates are pre-ranked by size and label presence; "
-            "the top N are the most informative."
-        ),
-    )
-
-
 class EngineRoutingConfig(BaseModel):
     """Controls which conversion engine is selected."""
 
@@ -406,12 +418,10 @@ class EngineRoutingConfig(BaseModel):
         default=ConversionEngineChoice.AUTO,
         description=(
             "Engine selection mode.  "
-            "auto = let feature extraction + Ollama VLM decide.  "
+            "auto = route deterministically from extracted structural evidence.  "
             "mineru / docling = bypass routing entirely."
         ),
     )
-
-    ollama_client: OllamaClientConfig = Field(default_factory=OllamaClientConfig)
 
 
 class WindowedExtractionConfig(BaseModel):
@@ -790,17 +800,29 @@ class PipelineConfig(BaseSettings):
     """
     Root configuration object for the entire pipeline.
 
-    Reads ``settings.yaml`` (located in the same ``src/`` directory as this
-    file) via pydantic-settings' ``YamlConfigSettingsSource`` and composes
-    all section configs into one strongly-typed object.
+    Reads ``settings.yaml`` (co-located with ``src/``) via pydantic-settings'
+    ``YamlConfigSettingsSource`` and composes all section configs into one
+    strongly-typed object.
+
+    Settings priority (highest → lowest)
+    --------------------------------------
+    1. Constructor keyword arguments
+    2. Environment variables (``PIPELINE_GPU__FORCE_CPU=true``)
+    3. ``settings.yaml``
+    4. Field defaults
 
     Instantiate once at pipeline startup::
 
         config = PipelineConfig()
 
-    Override the YAML path for testing::
+    Override the YAML path for tests by subclassing::
 
-        config = PipelineConfig(_yaml_file=Path("tests/fixtures/settings_test.yaml"))
+        class TestPipelineConfig(PipelineConfig):
+            _yaml_config_path: ClassVar[Path] = Path("tests/fixtures/settings_test.yaml")
+
+    This is the correct pydantic-settings v2 pattern.  ``settings_customise_sources``
+    is a classmethod — it has no access to instance state, so the YAML path must
+    be a class-level ``ClassVar``, not a constructor argument.
     """
 
     model_config = SettingsConfigDict(
@@ -809,8 +831,11 @@ class PipelineConfig(BaseSettings):
         extra="ignore",
     )
 
-    # Allow the YAML path to be overridden (e.g. in tests).
-    _yaml_file: Path = _SETTINGS_YAML_PATH
+    # ClassVar so settings_customise_sources (a classmethod) can read it via
+    # cls._yaml_config_path, and so tests can override it via subclassing.
+    # Must NOT be a Field — pydantic-settings would attempt to resolve it as
+    # a settings source, not as a path to a settings source.
+    _yaml_config_path: ClassVar[Path] = _SETTINGS_YAML_PATH
 
     # Section configs — each maps to a top-level key in settings.yaml.
     storage: DocumentStorageConfig = Field(default_factory=DocumentStorageConfig)
@@ -849,10 +874,13 @@ class PipelineConfig(BaseSettings):
 
         ``YamlConfigSettingsSource`` is placed last so env vars always win
         over the YAML file, which in turn wins over field defaults.
+
+        The YAML path is read from ``cls._yaml_config_path`` so subclasses can
+        override it for test fixtures without touching this method.
         """
         return (
             init_settings,
             env_settings,
-            YamlConfigSettingsSource(settings_cls, yaml_file=_SETTINGS_YAML_PATH),
+            YamlConfigSettingsSource(settings_cls, yaml_file=cls._yaml_config_path),
         )
 

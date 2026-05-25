@@ -11,9 +11,9 @@ document contains.
 
 What this package does NOT do
 ------------------------------
-It does not call any model or make any network request.  Engine selection
-(the decision of which conversion engine to use) lives in the sibling package
-``engine_decision_router``, which consumes the profile produced here.
+It does not call any model or make any network request.  Engine selection is
+fully deterministic and lives in ``capability_router`` within this package,
+consuming the profile produced here.
 """
 
 from .capability_router import CapabilityBasedEngineRouter
@@ -23,7 +23,7 @@ from .models import (
     DocumentRequirements,
     EngineFormatSupport,
     FeatureDocumentType,
-    OllamaVisualRoutingDecision,
+    LayoutEvidence,
     TableEvidence,
     TextEvidence,
     VisualCandidate,
@@ -38,7 +38,7 @@ __all__ = [
     "DocumentRequirements",
     "EngineFormatSupport",
     "FeatureDocumentType",
-    "OllamaVisualRoutingDecision",
+    "LayoutEvidence",
     "TableEvidence",
     "TextEvidence",
     "VisualCandidate",

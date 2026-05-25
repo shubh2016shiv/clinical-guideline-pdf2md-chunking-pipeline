@@ -4,9 +4,9 @@ pipeline_orchestrator.py
 Wires the preflight gate and Stage 1 modules together into a single call.
 
 This is the only place that knows the order: intake → hash → provision →
-feature extraction → optional local visual adjudication → capability routing.
-Entrypoints (CLI, API) call this and receive a result object — they never touch
-stage-internal modules directly.
+feature extraction → deterministic capability routing.  Entrypoints (CLI, API)
+call this and receive a result object — they never touch stage-internal modules
+directly.
 
 Usage
 -----
@@ -42,7 +42,6 @@ from .stage1_document_prescanning.doc_feature_extraction import (
     CapabilityBasedEngineRouter,
     DocumentFeatureExtractionEntryPoint,
 )
-from .stage1_document_prescanning.engine_decision_router import EngineRoutingAgent
 
 
 @dataclass
@@ -62,7 +61,6 @@ class Stage1Result:
     reason: str
     feature_summary: str
     inferred_requirements: list[str]
-    ollama_payload: dict[str, object] | None
     elapsed_ms: float
     errors: list[str] = field(default_factory=list)
 
@@ -85,7 +83,6 @@ class PipelineOrchestrator:
             feature_config=config.document_feature_extraction,
             constraints=config.document_constraints,
         )
-        self._routing_agent = EngineRoutingAgent(config.engine_routing.ollama_client)
         self._router = CapabilityBasedEngineRouter(config.engine_routing)
 
     # ------------------------------------------------------------------
@@ -114,17 +111,9 @@ class PipelineOrchestrator:
 
         # -- Deterministic feature evidence ---------------------------------
         feature_profile = self._feature_extractor.extract(document_path, hash_result.document_type)
-        ollama_payload = None
-        visual_decision = None
-        if feature_profile.requirements.needs_local_vlm_adjudication:
-            try:
-                visual_decision = self._routing_agent.decide(feature_profile)
-                ollama_payload = visual_decision.model_dump(mode="json")
-            except DocumentError as exc:
-                errors.append(str(exc))
 
-        # -- Capability-based engine routing --------------------------------
-        classification = self._router.route(feature_profile, visual_decision=visual_decision)
+        # -- Deterministic capability-based engine routing ------------------
+        classification = self._router.route(feature_profile)
 
         elapsed = (time.perf_counter() - t0) * 1000
 
@@ -142,7 +131,6 @@ class PipelineOrchestrator:
             reason=classification.reason,
             feature_summary=feature_profile.compact_summary(),
             inferred_requirements=feature_profile.requirements.rationale,
-            ollama_payload=ollama_payload,
             elapsed_ms=elapsed,
             errors=errors,
         )

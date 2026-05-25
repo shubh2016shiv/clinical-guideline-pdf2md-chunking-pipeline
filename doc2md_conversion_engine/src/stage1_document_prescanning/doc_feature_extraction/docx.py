@@ -26,8 +26,8 @@ and connected to the XML via a "relationships table" — essentially a manifest
 that says "this image tag in the XML refers to that file in the ZIP".
 
 Word exposes images through two separate APIs because of this split structure.
-We need both APIs to get an accurate image count — explained in
-``count_images_embedded_in_document`` below.
+We need both APIs to get an accurate image count — see
+``_count_images_anchored_in_text_flow`` and ``_count_image_files_in_zip_archive``.
 
 Why are page numbers estimated rather than read from the file?
   A DOCX file stores no page information.  Pages are calculated by the Word
@@ -53,6 +53,7 @@ from .engine_needs_evaluator import infer_requirements
 from .models import (
     DocumentFeatureProfile,
     FeatureDocumentType,
+    LayoutEvidence,
     TableEvidence,
     TextEvidence,
     VisualCandidate,
@@ -72,6 +73,12 @@ class DocxFeatureTotals:
     body_paragraphs: list[str] = field(default_factory=list)
 
     number_of_tables: int = 0
+    max_table_column_count: int = 0
+    has_merged_cells: bool = False
+    has_nested_tables: bool = False
+
+    column_count: int = 1
+    has_floating_text_boxes: bool = False
 
     images_in_text_flow: int = 0
     images_in_zip_archive: int = 0
@@ -114,6 +121,7 @@ def extract_docx_features(
     estimated_pages = estimate_page_count(totals.total_characters, docx_settings)
 
     collect_table_evidence_from_document(doc, totals)
+    collect_layout_evidence_from_document(doc, totals)
     collect_image_evidence_from_document(doc, totals)
     collect_caption_evidence(totals)
 
@@ -184,11 +192,82 @@ def estimate_page_count(total_characters: int, settings: DocxFeatureExtractionCo
 
 
 def collect_table_evidence_from_document(doc: object, totals: DocxFeatureTotals) -> None:
-    """Step 4: Count Word table objects."""
+    """
+    Step 4: Count Word table objects and read their structural complexity.
+
+    DOCX declares table structure directly in XML, so merged cells, nested
+    tables, and column counts are exact reads — no rendering or geometry needed.
+    These are the signals that decide whether a grid-naive parser will mangle
+    the table (→ MinerU) or handle it cleanly (→ Docling).
+    """
+    from docx.oxml.ns import qn  # noqa: PLC0415 — deferred; python-docx may not be installed
+
     import docx as _docx  # noqa: PLC0415
 
     real_doc: _docx.Document = doc  # type: ignore[assignment]
-    totals.number_of_tables = len(real_doc.tables)
+    tables = real_doc.tables
+    totals.number_of_tables = len(tables)
+
+    for table in tables:
+        totals.max_table_column_count = max(
+            totals.max_table_column_count, len(table.columns)
+        )
+        if not totals.has_nested_tables and _table_has_nested_table(table):
+            totals.has_nested_tables = True
+        if not totals.has_merged_cells and _table_has_merged_cells(table, qn):
+            totals.has_merged_cells = True
+
+
+def _table_has_nested_table(table: object) -> bool:
+    """Return True when any cell of *table* contains another table."""
+    return any(cell.tables for row in table.rows for cell in row.cells)
+
+
+def _table_has_merged_cells(table: object, qn: object) -> bool:
+    """
+    Return True when any cell carries horizontal (gridSpan) or vertical (vMerge)
+    merge geometry — both are single XML attribute checks in the cell's <w:tc>.
+    """
+    horizontal_merge_tag = qn("w:gridSpan")  # type: ignore[operator]
+    vertical_merge_tag = qn("w:vMerge")  # type: ignore[operator]
+    for row in table.rows:
+        for cell in row.cells:
+            cell_xml = cell._tc
+            if cell_xml.find(f".//{horizontal_merge_tag}") is not None:
+                return True
+            if cell_xml.find(f".//{vertical_merge_tag}") is not None:
+                return True
+    return False
+
+
+def collect_layout_evidence_from_document(doc: object, totals: DocxFeatureTotals) -> None:
+    """
+    Read multi-column sections and floating text boxes from the document XML.
+
+    ``<w:cols w:num="N">`` inside a section declares N text columns — a direct,
+    exact read with no geometry.  ``<w:txbxContent>`` marks a floating text box,
+    which breaks linear reading order.  Both promote to a layout-aware engine.
+    """
+    from docx.oxml.ns import qn  # noqa: PLC0415
+
+    import docx as _docx  # noqa: PLC0415
+
+    real_doc: _docx.Document = doc  # type: ignore[assignment]
+
+    column_number_attr = qn("w:num")
+    max_columns = 1
+    for section in real_doc.sections:
+        cols_element = section._sectPr.find(qn("w:cols"))
+        if cols_element is None:
+            continue
+        declared = cols_element.get(column_number_attr)
+        if declared and declared.isdigit():
+            max_columns = max(max_columns, int(declared))
+    totals.column_count = max_columns
+
+    totals.has_floating_text_boxes = (
+        next(real_doc.element.iter(qn("w:txbxContent")), None) is not None
+    )
 
 
 def collect_image_evidence_from_document(doc: object, totals: DocxFeatureTotals) -> None:
@@ -248,13 +327,14 @@ def build_docx_feature_profile(
       derived from the evidence above.  The router uses these to filter the
       engine candidates it will score.
     """
-    # DOCX image count is the higher of two independent API counts; see
-    # count_images_embedded_in_document for why both counts are needed.
+    # DOCX image count is the higher of two independent API counts (inline
+    # shapes vs. ZIP-archive image parts) — see collect_image_evidence_from_document.
     number_of_images = max(totals.images_in_text_flow, totals.images_in_zip_archive)
 
     # Aggregate statistics — one object per feature dimension.
     text_evidence = build_text_evidence(totals, estimated_pages)
     table_evidence = build_table_evidence(totals, estimated_pages)
+    layout_evidence = build_layout_evidence(totals)
     visual_evidence = build_visual_evidence(totals, estimated_pages, number_of_images)
 
     # Representative examples — one candidate per feature type (images, tables),
@@ -275,6 +355,7 @@ def build_docx_feature_profile(
     requirements = infer_requirements(
         text=text_evidence,
         tables=table_evidence,
+        layout=layout_evidence,
         visuals=visual_evidence,
         visual_candidates=visual_candidates,
         settings=evaluator_settings,
@@ -285,6 +366,7 @@ def build_docx_feature_profile(
         page_or_unit_count=estimated_pages,
         text=text_evidence,
         tables=table_evidence,
+        layout=layout_evidence,
         visuals=visual_evidence,
         visual_candidates=visual_candidates,
         format_support=get_engine_format_support(FeatureDocumentType.DOCX),
@@ -311,6 +393,18 @@ def build_table_evidence(totals: DocxFeatureTotals, estimated_pages: int) -> Tab
         # DOCX stores no size information for tables in its XML.  We cannot tell
         # a large data table from a small inline one without rendering.
         large_count=0,
+        # Structure, by contrast, is declared exactly in the XML.
+        max_column_count=totals.max_table_column_count,
+        has_merged_cells=totals.has_merged_cells,
+        has_nested_tables=totals.has_nested_tables,
+    )
+
+
+def build_layout_evidence(totals: DocxFeatureTotals) -> LayoutEvidence:
+    """Summarize page-layout evidence read from the document section XML."""
+    return LayoutEvidence(
+        column_count=totals.column_count,
+        has_floating_text_boxes=totals.has_floating_text_boxes,
     )
 
 
@@ -393,40 +487,6 @@ def build_visual_candidates(
 # ---------------------------------------------------------------------------
 # Image counting helpers
 # ---------------------------------------------------------------------------
-
-
-def count_images_embedded_in_document(doc: object) -> int:
-    """
-    Return how many images are embedded in the document.
-
-    Word exposes images through two separate APIs because of how DOCX is
-    structured as a ZIP archive:
-
-    API 1 — Images anchored in the text flow (doc.inline_shapes):
-        When you insert a picture "inline" in Word (the default), it lives
-        directly in the paragraph.  python-docx tracks these as "inline shapes".
-        This misses images placed in headers, footers, or as floating objects.
-
-    API 2 — Every image file stored inside the ZIP (doc.part.related_parts):
-        The DOCX ZIP archive contains a relationships table — a manifest
-        listing every file in the archive and what it is.  Entries whose
-        "content type" starts with "image/" are image files.  Content type
-        is the same concept as a MIME type (image/png, image/jpeg, etc.).
-        This API catches images anywhere in the document but can over-count
-        if there are duplicate image assets.
-
-    We take the higher of the two counts as a conservative safe estimate.
-    """
-    images_in_text_flow = _count_images_anchored_in_text_flow(doc)
-    images_in_zip_archive = _count_image_files_in_zip_archive(doc)
-    total = max(images_in_text_flow, images_in_zip_archive)
-    logger.debug(
-        "Image count — text_flow=%d  zip_archive=%d  using=%d",
-        images_in_text_flow,
-        images_in_zip_archive,
-        total,
-    )
-    return total
 
 
 def _count_images_anchored_in_text_flow(doc: object) -> int:

@@ -66,6 +66,7 @@ from .engine_needs_evaluator import infer_requirements
 from .models import (
     DocumentFeatureProfile,
     FeatureDocumentType,
+    LayoutEvidence,
     TableEvidence,
     TextEvidence,
     VisualCandidate,
@@ -241,6 +242,7 @@ def build_html_feature_profile(
     # Aggregate statistics — one object per feature dimension.
     text_evidence = build_text_evidence(total_characters, estimated_pages)
     table_evidence = build_table_evidence(scanner, estimated_pages)
+    layout_evidence = build_layout_evidence()
     visual_evidence = build_visual_evidence(scanner, estimated_pages, total_captioned_figures)
 
     # Representative examples — ranked by label presence (no area available for HTML),
@@ -256,6 +258,7 @@ def build_html_feature_profile(
     requirements = infer_requirements(
         text=text_evidence,
         tables=table_evidence,
+        layout=layout_evidence,
         visuals=visual_evidence,
         visual_candidates=visual_candidates,
     )
@@ -265,6 +268,7 @@ def build_html_feature_profile(
         page_or_unit_count=estimated_pages,
         text=text_evidence,
         tables=table_evidence,
+        layout=layout_evidence,
         visuals=visual_evidence,
         visual_candidates=visual_candidates,
         format_support=get_engine_format_support(FeatureDocumentType.HTML),
@@ -293,7 +297,22 @@ def build_table_evidence(
         # HTML provides no reliable size information for tables without rendering.
         # We cannot distinguish a large data table from a small inline one.
         large_count=0,
+        # Structure, by contrast, is declared exactly in the markup.
+        max_column_count=scanner.max_table_column_count,
+        has_merged_cells=scanner.has_merged_cells,
+        has_nested_tables=scanner.has_nested_tables,
     )
+
+
+def build_layout_evidence() -> LayoutEvidence:
+    """
+    Summarize layout evidence for the HTML document.
+
+    Multi-column layout in HTML lives in CSS (``column-count``, flexbox, grid),
+    which is not rendered here, so column count cannot be read reliably and stays
+    at the single-column default.  HTML has no floating-text-box concept either.
+    """
+    return LayoutEvidence(column_count=1, has_floating_text_boxes=False)
 
 
 def build_visual_evidence(
@@ -342,6 +361,14 @@ def _candidate_routing_priority(candidate: VisualCandidate) -> int:
     """Score an HTML visual candidate for routing relevance."""
     has_label = bool(candidate.caption_or_alt_text or candidate.nearby_text)
     return (1 if has_label else 0) + len(candidate.evidence)
+
+
+def _parse_positive_int(value: str | None, *, default: int) -> int:
+    """Parse an HTML attribute as a positive int, falling back to *default*."""
+    if value is None:
+        return default
+    stripped = value.strip()
+    return int(stripped) if stripped.isdigit() and int(stripped) > 0 else default
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +424,14 @@ class HtmlDocumentScanner(HTMLParser):
         self.figure_caption_count: int = 0
         self.svg_count: int = 0
 
+        # Table structure — read directly from rowspan/colspan attributes and
+        # table nesting depth.  HTML declares all three exactly, no rendering needed.
+        self.has_merged_cells: bool = False
+        self.has_nested_tables: bool = False
+        self.max_table_column_count: int = 0
+        self._open_table_depth: int = 0
+        self._current_row_column_count: int = 0
+
         # Visual candidates for downstream review
         self.visual_candidates: list[VisualCandidate] = []
 
@@ -419,6 +454,9 @@ class HtmlDocumentScanner(HTMLParser):
 
         if tag_name == "table":
             self.table_count += 1
+            if self._open_table_depth >= 1:
+                self.has_nested_tables = True
+            self._open_table_depth += 1
             self.visual_candidates.append(
                 VisualCandidate(
                     kind=VisualCandidateKind.TABLE,
@@ -426,6 +464,18 @@ class HtmlDocumentScanner(HTMLParser):
                     evidence=["<table> tag found in HTML source"],
                 )
             )
+            return
+
+        if tag_name == "tr":
+            self._current_row_column_count = 0
+            return
+
+        if tag_name in {"td", "th"}:
+            column_span = _parse_positive_int(attributes.get("colspan"), default=1)
+            row_span = _parse_positive_int(attributes.get("rowspan"), default=1)
+            if column_span > 1 or row_span > 1:
+                self.has_merged_cells = True
+            self._current_row_column_count += column_span
             return
 
         if tag_name == "figure":
@@ -476,6 +526,12 @@ class HtmlDocumentScanner(HTMLParser):
             self.currently_inside_script_or_style_block = False
         elif tag_name == "figcaption":
             self.currently_inside_a_figure_caption = False
+        elif tag_name == "tr":
+            self.max_table_column_count = max(
+                self.max_table_column_count, self._current_row_column_count
+            )
+        elif tag_name == "table" and self._open_table_depth > 0:
+            self._open_table_depth -= 1
 
     def handle_data(self, data: str) -> None:
         """Called by HTMLParser for each block of plain text between tags."""

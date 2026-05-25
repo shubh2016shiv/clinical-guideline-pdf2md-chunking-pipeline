@@ -49,6 +49,17 @@ document_feature_extraction:
     # Range: 20-100. Higher reduces noise from borders, bullets, and decorations.
     vector_graphics_page_min_drawings: 20
 
+    # Multi-column detection (two levels). Per page: a page is 2-column when at
+    # least `right_band_fraction` of its text blocks start right of the gutter
+    # while others start left of it. Per document: the whole document is treated
+    # as multi-column only when at least `doc_page_fraction` of judgeable pages
+    # are 2-column — so a few 2-column appendix pages don't flip a single-column
+    # guideline. Sparse pages (< min_text_blocks) are left undetermined.
+    multi_column_gutter_ratio: 0.5        # fraction of page width = vertical gutter (0.5 = midline)
+    multi_column_min_text_blocks: 8       # pages below this are too sparse to judge
+    multi_column_right_band_fraction: 0.30   # per-page: share of blocks right of the gutter
+    multi_column_doc_page_fraction: 0.30     # per-document: share of pages that are 2-column
+
     # Keep only the top-ranked candidates for routing/debugging.
     # Range: 1-50.
     max_visual_candidates: 10
@@ -89,6 +100,10 @@ document_feature_extraction:
     max_visual_candidates: 10
 
   engine_needs_evaluator:
+    # A table with more columns than this is treated as structurally complex and
+    # promotes to a layout-aware engine (MinerU). Range: 5-8.
+    wide_table_max_simple_columns: 6
+
     # Minimum fraction of page/slide area for a visual to be treated as meaningful content.
     # Visuals BELOW this threshold AND whose label contains a decorative term are excluded
     # from VLM routing — they are likely logos, icons, or dividers, not clinical figures.
@@ -110,18 +125,13 @@ document_feature_extraction:
 # -----------------------------------------------------------------------------
 # Engine Routing
 # Controls which conversion engine is selected.
-# Routing is driven by deterministic feature extraction + local Ollama VLM —
-# not by hand-tuned numeric complexity thresholds.
+# Routing is fully deterministic: it promotes to MinerU only on hard structural
+# evidence (multi-column layout, complex tables, missing text layer) extracted in
+# Stage 1, and otherwise confirms Docling. No model inference is involved.
 # Read by: contracts/pipeline_config.py → stage1_document_prescanning
 # -----------------------------------------------------------------------------
 engine_routing:
   conversion_engine: auto          # auto | mineru | docling
-  # Local Ollama model used for visual routing decisions
-  ollama_client:
-    base_url: "http://127.0.0.1:11434"
-    model: "qwen3.5:4b"
-    timeout_seconds: 600.0          # 10 min — reasoning models on local hardware need time
-    max_candidates: 5               # top-N visual candidates sent per document
 
 
 # -----------------------------------------------------------------------------
