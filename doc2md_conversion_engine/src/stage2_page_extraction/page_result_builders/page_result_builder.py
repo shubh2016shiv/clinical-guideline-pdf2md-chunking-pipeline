@@ -33,6 +33,7 @@ def build_page_result(
     window_output_dir: Path,
     duration_ms: int,
     is_degraded: bool = False,
+    effective_backend: str | None = None,
 ) -> PageResult:
     """
     Build the canonical ``PageResult`` for one extracted page.
@@ -45,10 +46,12 @@ def build_page_result(
          token and flagging any that may run onto the next page.
 
     The resulting ``markdown_with_tokens`` is the page as a template: prose plus
-    ``${FIG:...}`` and ``${TBL:...}`` anchors that Stage 4 resolves. ``is_degraded``
-    is set by the resilient engine when the fallback engine produced this page. Figure
-    PNGs are written under ``window_output_dir`` so they live alongside that window's
-    results and are covered by the same checkpoint.
+    ``${FIG:...}`` and ``${TBL:...}`` anchors that Stage 4 resolves. ``effective_backend``
+    records the concrete rung that produced the page (e.g. ``pipeline``); ``is_degraded``
+    marks a page produced below the routed engine's top capability — set by an engine
+    that stepped down its own ladder, or by the resilient wrapper on cross-engine
+    fallback. Figure PNGs are written under ``window_output_dir`` so they live alongside
+    that window's results and are covered by the same checkpoint.
     """
     normalized_markdown = normalize_markdown(raw_page.markdown)
 
@@ -69,6 +72,7 @@ def build_page_result(
     return PageResult(
         page_number=raw_page.page_number,
         engine_used=engine,
+        effective_backend=effective_backend,
         is_degraded=is_degraded,
         markdown_with_tokens=markdown_with_tokens,
         figures=figures,

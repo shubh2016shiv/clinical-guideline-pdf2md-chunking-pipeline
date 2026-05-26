@@ -352,12 +352,25 @@ class PageResult(BaseModel):
         description="The engine that processed this page.",
     )
 
+    effective_backend: str | None = Field(
+        default=None,
+        description=(
+            "The concrete backend/rung that actually produced this page — e.g. "
+            "'vlm-auto-engine', 'pipeline' for MinerU. None when the engine has no "
+            "backend tiers (Docling). Lets downstream see *which* capability rung ran, "
+            "not just which engine."
+        ),
+    )
+
     is_degraded: bool = Field(
         default=False,
         description=(
-            "True when the fallback engine (Docling) was used instead of the "
-            "primary engine (MinerU).  Emitted as a pipeline metric so operators "
-            "can quantify accuracy impact on a per-document basis."
+            "True when this page was produced below the capability the document was "
+            "routed for — i.e. not at the top rung of the routed engine's ladder. This "
+            "covers both an intra-engine step-down (e.g. MinerU VLM → pipeline on a GPU "
+            "too small for the VLM) and a cross-engine fallback (MinerU → Docling). "
+            "``effective_backend`` says which rung actually ran. Emitted as a pipeline "
+            "metric so operators can quantify accuracy impact per document."
         ),
     )
 

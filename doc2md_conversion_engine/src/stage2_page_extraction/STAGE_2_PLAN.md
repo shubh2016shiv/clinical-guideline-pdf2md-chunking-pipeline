@@ -300,10 +300,84 @@ rather than fragile string-matching of table text inside the page. It does **not
 merge — see §6.
 
 **`page_result_builder.py`** is the small coordinator that calls the helpers above
-and returns one finished `PageResult { page_number, engine_used, is_degraded,
-markdown_with_tokens, figures[], tables[], duration_ms }`. The `markdown_with_tokens`
-is the page as a *template*: prose plus `${FIG:...}` and `${TBL:...}` anchors that
-Stage 4 resolves into the final document.
+and returns one finished `PageResult { page_number, engine_used, effective_backend,
+is_degraded, markdown_with_tokens, figures[], tables[], duration_ms }`. The
+`markdown_with_tokens` is the page as a *template*: prose plus `${FIG:...}` and
+`${TBL:...}` anchors that Stage 4 resolves into the final document.
+
+---
+
+## 5.5 The capability ladder: degrade *within* an engine before crossing engines
+
+> **The rule:** a timeout must bound only *work*; an engine must exhaust *its own*
+> capability modes before the pipeline abandons it for a different engine.
+
+Stage 1 routes a hard document to MinerU for a reason. MinerU itself can run several
+ways — ranked highest-quality-first in `mineru_engine.backend_ladder` (config, so the
+**order is a stability contract**, fixed before deploy):
+
+| Rung | Accuracy | Needs | Model family |
+|------|---------:|-------|--------------|
+| `vlm-auto-engine` (local GPU) | 95+ | ~8 GB VRAM | vlm |
+| `vlm-http-client` (remote VLM) | 95+ | 2 GB local + `server_url` | none (remote) |
+| `pipeline` | 85+ | CPU ✅ or 4 GB GPU | pipeline |
+
+### Two levels of fallback
+
+```
+   MinerU (routed)
+        │
+        ▼
+   ┌──────────── INTRA-ENGINE ladder (inside MinerUSubprocessEngine) ───────────┐
+   │  start():  reachable = rungs this hardware can run        ← PROACTIVE        │
+   │            current = reachable[0]                                            │
+   │            preload VLM only if current is a vlm rung                         │
+   │                                                                              │
+   │  per page: try current rung                                                  │
+   │            └─ "CUDA out of memory" ─▶ step DOWN, commit, retry  ← REACTIVE   │
+   │               (vlm-auto-engine → pipeline; never steps back up)              │
+   └────────────────────────────────────┬─────────────────────────────────────────┘
+                       all reachable rungs exhausted (non-OOM error, or OOM at floor)
+                                         │
+                                         ▼
+   ┌──────────── CROSS-ENGINE fallback (resilient_conversion_engine) ────────────┐
+   │  MinerU → Docling                                                            │
+   └────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Proactive** (`engine_bootstrap.resolve_reachable_rungs`): the starting rung is the
+  highest the hardware can actually run — `usable VRAM = min(free VRAM, max_vram_mb)`
+  vs. each rung's `min_vram_mb`, using MinerU's documented 8 GB VLM floor. A 6 GB box
+  starts at `pipeline`; a 12 GB box starts at `vlm`. **Same code, right choice per box
+  — no hardware hardcoding.** This eliminates the predictable failures (model load +
+  inference + retries that were always going to OOM).
+- **Reactive** (`_parse_page_walking_ladder`): even when the proactive check passed, a
+  runtime `CUDA out of memory` (stale VRAM snapshot, contention) steps the engine down
+  one rung and retries the page. Only resource-exhaustion triggers a step-down; other
+  failures propagate so a lower rung isn't pointlessly tried for a problem it shares.
+- **Per-document commit, no step-back:** once stepped down, the engine stays on the
+  lower rung for the rest of the document (VRAM pressure won't clear mid-document, and
+  uniform per-document accuracy is a clean downstream contract). The MinerU engine is
+  built per-document, so the next document starts fresh with a new VRAM check.
+
+### What downstream sees
+
+Each `PageResult` carries `effective_backend` (the rung that ran — `vlm-auto-engine` /
+`pipeline` / `None` for Docling) and `is_degraded` (**True when the page ran below the
+routed engine's top rung** — covering both a MinerU `vlm→pipeline` step-down *and* a
+cross-engine fall to Docling). So `engine_used=mineru, effective_backend=pipeline,
+is_degraded=True` is the clean signal that a document got 85+ MinerU instead of 95+.
+
+### Where bootstrap fits
+
+`engine_bootstrap` (untimed, runs before the timed lifecycle) provisions the model
+families for **every reachable rung**, so the runtime step-down never blocks on a
+download. On a 6 GB box it fetches only the `pipeline` family; on a 12 GB box it
+fetches `vlm` + `pipeline`. The starting rung and the bootstrap download set are
+computed by the *same* `resolve_reachable_rungs`, so the engine never tries a rung
+whose weights bootstrap skipped. Docling has the same shape internally (CUDA→CPU via
+its accelerator device), so the pattern — *exhaust an engine's own modes first* — is
+uniform, not MinerU-specific plumbing.
 
 ---
 

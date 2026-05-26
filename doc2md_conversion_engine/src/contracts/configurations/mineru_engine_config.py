@@ -15,10 +15,70 @@ and can be overridden at runtime via environment variables prefixed with
 
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ..pipeline_domain_types import MinerUBackend
+
+
+class BackendRung(BaseModel):
+    """
+    One rung of MinerU's capability ladder — a backend plus what it requires.
+
+    The ladder is an *ordered* list of these (highest capability first). At run time
+    the engine keeps only the rungs this hardware/config can actually reach and walks
+    them top-down, stepping to the next rung when one fails. The ORDER is a contract:
+    it is fixed in ``settings.yaml`` so an upgrade never silently reshuffles the
+    fallback sequence a deployment already depends on.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    backend: str = Field(
+        ...,
+        description=(
+            "The exact MinerU backend name (e.g. 'vlm-auto-engine', 'vlm-http-client', "
+            "'pipeline'). Must be a name MinerU accepts — an unknown name makes MinerU "
+            "skip the file."
+        ),
+    )
+    min_vram_mb: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Minimum usable GPU VRAM (MiB) this rung needs. A rung is skipped at "
+            "selection time when usable VRAM is below this. 0 means 'always reachable' "
+            "(the CPU-capable floor)."
+        ),
+    )
+    requires_server_url: bool = Field(
+        default=False,
+        description=(
+            "True for remote rungs (the *-http-client backends): the rung is skipped "
+            "unless a ``server_url`` is configured."
+        ),
+    )
+
+
+def _default_backend_ladder() -> list[BackendRung]:
+    """
+    The default capability ladder, highest quality first.
+
+    vlm-auto-engine (local GPU, 95+ accuracy, needs ~8 GB VRAM)
+        ↓
+    vlm-http-client (remote VLM, 95+ at ~2 GB local — skipped unless server_url set)
+        ↓
+    pipeline (rule-based, 85+ accuracy, CPU-capable — the guaranteed floor)
+
+    http-client sits ABOVE pipeline on purpose: when a remote VLM server is available
+    it delivers VLM-quality output at tiny local cost, so it is strictly preferable to
+    the pipeline floor.
+    """
+    return [
+        BackendRung(backend="vlm-auto-engine", min_vram_mb=8192),
+        BackendRung(backend="vlm-http-client", min_vram_mb=2048, requires_server_url=True),
+        BackendRung(backend="pipeline", min_vram_mb=0),
+    ]
 
 
 class MinerUEngineConfig(BaseSettings):
@@ -46,11 +106,29 @@ class MinerUEngineConfig(BaseSettings):
     )
 
     backend: MinerUBackend = Field(
-        default=MinerUBackend.VLM,
+        default=MinerUBackend.AUTO,
         description=(
-            "Processing backend to use.  "
-            "VLM = GPU-accelerated Vision-Language Model (highest accuracy).  "
-            "PIPELINE = CPU-only rule-based pipeline (no GPU required)."
+            "How the backend is chosen.  "
+            "AUTO = walk ``backend_ladder``: pick the highest rung this hardware can "
+            "reach and step down on failure (the recommended, hardware-portable mode).  "
+            "VLM / PIPELINE = pin to that single backend and disable the ladder."
+        ),
+    )
+
+    backend_ladder: list[BackendRung] = Field(
+        default_factory=_default_backend_ladder,
+        description=(
+            "Ordered capability ladder used when ``backend`` is AUTO. Highest quality "
+            "first; the engine keeps the rungs reachable on this hardware and steps "
+            "down on failure. The ORDER is a stability contract — fix it before deploy."
+        ),
+    )
+
+    server_url: str | None = Field(
+        default=None,
+        description=(
+            "Base URL of a remote MinerU VLM server (for the *-http-client rungs). "
+            "When unset, those rungs are skipped. e.g. 'http://10.0.0.5:30000'."
         ),
     )
 

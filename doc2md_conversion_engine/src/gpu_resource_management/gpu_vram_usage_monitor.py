@@ -22,25 +22,41 @@ class GPUVRAMUsageMonitor:
 
     def current_used_mb(self) -> int:
         """Return current used VRAM in MiB, or 0 when NVML/GPU is unavailable."""
+        return self._read_memory_field("used", default=0)
+
+    def current_free_mb(self) -> int:
+        """
+        Return currently free VRAM in MiB, or 0 when NVML/GPU is unavailable.
+
+        Used for proactive backend selection: a capability rung is reachable only when
+        the free VRAM (capped by the configured budget) clears the rung's requirement.
+        Returns 0 in CPU mode or when NVML cannot be read, so GPU rungs are skipped and
+        the engine starts at a CPU-capable rung — the safe default.
+        """
+        return self._read_memory_field("free", default=0)
+
+    def _read_memory_field(self, field: str, *, default: int) -> int:
+        """Read one NVML device-memory field (``used``/``free``/``total``) in MiB."""
         if not self._config.enabled or self._config.force_cpu:
-            return 0
+            return default
 
         pynvml = self._load_pynvml()
         if pynvml is None:
-            return 0
+            return default
 
         try:
             pynvml.nvmlInit()
             handle = pynvml.nvmlDeviceGetHandleByIndex(self._config.cuda_device_id)
             memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-            return int(memory_info.used // _BYTES_PER_MIB)
+            return int(getattr(memory_info, field) // _BYTES_PER_MIB)
         except Exception as exc:
             logger.warning(
-                "gpu.vram.unavailable cuda_device_id=%s reason=%s",
+                "gpu.vram.unavailable cuda_device_id=%s field=%s reason=%s",
                 self._config.cuda_device_id,
+                field,
                 type(exc).__name__,
             )
-            return 0
+            return default
         finally:
             try:
                 pynvml.nvmlShutdown()

@@ -3,10 +3,11 @@ pipeline_orchestrator.py
 =========================
 Wires the preflight gate and Stage 1 modules together into a single call.
 
-This is the only place that knows the order: intake → hash → provision →
-feature extraction → deterministic capability routing.  Entrypoints (CLI, API)
-call this and receive a result object — they never touch stage-internal modules
-directly.
+This is the only place that knows the order: intake → hash → provision → feature
+extraction → deterministic capability routing (Stage 1), then engine bootstrap
+(untimed model preparedness) → windowed page extraction (Stage 2).  Entrypoints
+(CLI, API) call this and receive a result object — they never touch stage-internal
+modules directly.
 
 Usage
 -----
@@ -30,6 +31,7 @@ Usage
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
@@ -42,6 +44,7 @@ from .contracts.pipeline_domain_types import (
     EngineClassification,
     PageResult,
 )
+from .engine_bootstrap import EngineBootstrapSelector
 from .file_upload_management import DocumentUploadIntake, UploadedDocumentStagingStore
 from .stage1_document_prescanning import (
     DocumentFeatureExtractor,
@@ -50,6 +53,8 @@ from .stage1_document_prescanning import (
     EngineRoutingPolicy,
 )
 from .stage2_page_extraction import WindowedPageExtractionOrchestrator
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -109,6 +114,7 @@ class PipelineOrchestrator:
             constraints=config.document_constraints,
         )
         self._router = EngineRoutingPolicy(config.engine_routing)
+        self._engine_bootstrap = EngineBootstrapSelector(config)
         self._stage2 = WindowedPageExtractionOrchestrator(config)
 
     # ------------------------------------------------------------------
@@ -165,10 +171,24 @@ class PipelineOrchestrator:
         """
         Drive Stage 2 for an already-prescanned job, streaming each extracted page.
 
-        Takes the live ``ConversionJob`` and ``EngineClassification`` from Stage 1
-        (the engine choice plus its backend and output paths) and yields the page
-        stream produced by the windowed, checkpointed, fault-tolerant extractor.
+        First makes the chosen engine ready (``engine_bootstrap``), then streams the
+        page results from the windowed, checkpointed, fault-tolerant extractor.
+
+        Bootstrap runs here, *before* the timed engine lifecycle, and is deliberately
+        untimed: a first-run model download may legitimately take minutes. Doing it
+        here is what lets Stage 2's startup and per-window timeouts bound only real
+        extraction work, never a model download.
         """
+        readiness = await self._engine_bootstrap.bootstrap_for(classification.engine).ensure_ready()
+        logger.info(
+            "stage2.bootstrap.ready job_id=%s engine=%s backend=%s gpu_enabled=%s notes=%s",
+            job.job_id,
+            readiness.engine.value,
+            readiness.resolved_backend,
+            readiness.gpu_enabled,
+            "; ".join(readiness.notes),
+        )
+
         async for page_result in self._stage2.extract(job, classification):
             yield page_result
 

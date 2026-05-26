@@ -139,7 +139,20 @@ engine_routing:
 # Read by: contracts/mineru_engine_config.py → stage2 MinerU engine
 # -----------------------------------------------------------------------------
 mineru_engine:
-  backend: auto                     # auto | vlm | pipeline
+  backend: auto                     # auto = walk backend_ladder | vlm | pipeline (pin one)
+  server_url: null                  # base URL of a remote MinerU VLM server; enables the
+                                    #   *-http-client rungs. null = those rungs are skipped.
+  # Capability ladder walked when backend=auto. ORDER IS A CONTRACT: highest quality
+  # first; the engine keeps the rungs this hardware can reach and steps DOWN on failure
+  # (e.g. VLM out-of-memory). Reordering changes fallback behavior for every deployment.
+  backend_ladder:
+    - backend: vlm-auto-engine      # local GPU VLM, 95+ accuracy
+      min_vram_mb: 8192             #   MinerU's documented VLM floor
+    - backend: vlm-http-client      # remote VLM, 95+ at ~2GB local (needs server_url)
+      min_vram_mb: 2048
+      requires_server_url: true
+    - backend: pipeline             # rule-based, 85+, CPU-capable — the guaranteed floor
+      min_vram_mb: 0
   api_host: "127.0.0.1"
   api_port: 8888
   startup_timeout_seconds: 60       # max wait for mineru-api subprocess to be ready

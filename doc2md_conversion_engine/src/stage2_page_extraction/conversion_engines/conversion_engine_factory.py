@@ -99,7 +99,7 @@ class ConversionEngineFactory:
         if engine == ExtractionEngine.DOCLING:
             return DoclingInProcessEngine(self._config.docling_engine, self._config.gpu, job_id)
         if engine == ExtractionEngine.MINERU:
-            return MinerUSubprocessEngine(self._config.mineru_engine, job_id)
+            return MinerUSubprocessEngine(self._config.mineru_engine, self._config.gpu, job_id)
         raise ConfigurationError(
             f"No conversion engine adapter is registered for {engine.value!r}.",
             context={"engine": engine.value},
