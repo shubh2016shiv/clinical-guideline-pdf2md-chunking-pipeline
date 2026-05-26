@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 
 from ..contracts.configurations.pipeline_config import TimeoutsConfig
 from ..contracts.exceptions import (
+    EngineStartupError,
     EngineTimeoutError,
     FigureSummarizationError,
     PipelineError,
@@ -36,6 +37,21 @@ class AsyncOperationTimeoutGuard:
             "component_name": component_name,
         }
         async with self._timeout(deadline, EngineTimeoutError, context):
+            yield
+
+    @asynccontextmanager
+    async def engine_startup(
+        self,
+        *,
+        component_name: str | None = None,
+    ) -> AsyncGenerator[None, None]:
+        deadline = self._config.engine_startup_seconds
+        context = {
+            "operation": "engine_startup",
+            "deadline_seconds": deadline,
+            "component_name": component_name,
+        }
+        async with self._timeout(deadline, EngineStartupError, context):
             yield
 
     @asynccontextmanager

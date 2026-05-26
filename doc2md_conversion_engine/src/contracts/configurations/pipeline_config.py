@@ -49,7 +49,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import ClassVar
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -708,6 +708,12 @@ class TimeoutsConfig(BaseModel):
         description="Max time for a single GPU extraction window.",
     )
 
+    engine_startup_seconds: float = Field(
+        default=300.0,
+        gt=0.0,
+        description="Max time for a conversion engine to initialise before any windows run.",
+    )
+
     llm_batch_call_seconds: float = Field(
         default=60.0,
         gt=0.0,
@@ -883,4 +889,3 @@ class PipelineConfig(BaseSettings):
             env_settings,
             YamlConfigSettingsSource(settings_cls, yaml_file=cls._yaml_config_path),
         )
-

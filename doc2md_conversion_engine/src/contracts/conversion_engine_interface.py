@@ -20,7 +20,7 @@ caller can swap them at runtime without changing its own code.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from .pipeline_domain_types import (
     ExtractionEngine,
@@ -34,7 +34,7 @@ class AbstractConversionEngine(ABC):
 
     Lifecycle
     ---------
-    1. ``start()``          — warm up the engine (load models, start subprocess).
+    1. ``start()``          — initialise the engine adapter or start its subprocess.
     2. ``convert_window()`` — extract one window of pages; yield PageResults.
     3. ``stop()``           — release GPU memory and shut down subprocess.
 
@@ -72,8 +72,9 @@ class AbstractConversionEngine(ABC):
         For MinerU: starts the ``mineru-api`` FastAPI subprocess and waits
         until its ``/health`` endpoint returns 200 OK.
 
-        For Docling: loads the Heron layout model and TableFormer into memory
-        (and onto the GPU if available).
+        For Docling: builds the in-process converter and validates configuration.
+        Heavy model loading may happen during the first window so it remains inside
+        the engine lifecycle's GPU ownership boundary.
 
         Raises
         ------

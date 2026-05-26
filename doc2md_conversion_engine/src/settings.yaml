@@ -156,6 +156,7 @@ docling_engine:
   ocr_enabled: true
   ocr_backend: rapidocr             # rapidocr | easyocr
   table_structure_model: tableformer
+  allow_model_downloads: false      # keep Stage 2 deterministic; pre-download models instead
 
 
 # -----------------------------------------------------------------------------
@@ -249,6 +250,7 @@ fault_tolerance:
   # asyncio.timeout() config — per-operation hard deadlines
   # No library needed: asyncio.timeout() is stdlib from Python 3.11+
   timeouts:
+    engine_startup_seconds: 300     # max time for engine startup/model initialisation
     engine_window_seconds: 300      # max time for a single GPU extraction window
     llm_batch_call_seconds: 60      # max time for one vision LLM batch API call
     gpu_acquire_seconds: 30         # max wait to acquire exclusive GPU context

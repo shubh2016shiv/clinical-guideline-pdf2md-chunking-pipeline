@@ -104,3 +104,12 @@ class DoclingEngineConfig(BaseSettings):
             "TableFormer (~0.5 GB VRAM) is the recommended choice for clinical tables."
         ),
     )
+
+    allow_model_downloads: bool = Field(
+        default=False,
+        description=(
+            "Allow Docling/Hugging Face models to be downloaded during Stage 2. "
+            "Production runs should keep this False and pre-populate the model cache "
+            "so extraction cannot appear hung on a network download."
+        ),
+    )

@@ -17,8 +17,9 @@ actually asks:
                             degrades to Docling on failure.
 
     windowed_extraction   — "HOW do pages flow through?"
-                            The window loop: plan the remaining windows, lease the
-                            GPU per window, convert, checkpoint, and stream results.
+                            The window loop: plan the remaining windows, hold the
+                            GPU while the engine is alive, convert, checkpoint, and
+                            stream results.
 
     page_result_builders  — "WHAT does each page become?"
                             Shared helpers that turn each engine's raw page output

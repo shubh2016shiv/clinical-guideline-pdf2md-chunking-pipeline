@@ -106,7 +106,7 @@ stage2_page_extraction/                 ← ALL 8 files are 0 bytes
     conversion_engine_router.py         ❌
     docling_inprocess_engine.py         ❌
     mineru_subprocess_engine.py         ❌
-  gpu_window_scheduler.py               ❌
+  gpu_engine_resource_coordinator.py               ❌
   windowed_extraction_orchestrator.py   ❌
   page_element_extractors/
     cross_page_table_merger.py          ❌
@@ -165,7 +165,7 @@ stage2_page_extraction/
 │   │                                            windowing, GPU scheduling, checkpoint/resume loop
 │   ├── windowed_page_extraction_orchestrator.py  # (rename) Stage 2 entry: drives the loop, streams PageResults
 │   ├── page_window_planner.py             # (new)    pure logic: pages + window_size + resume point → windows to run
-│   ├── gpu_window_scheduler.py            # (keep)   per-window exclusive GPU lease; CPU-mode no-op; VRAM observability
+│   ├── gpu_engine_resource_coordinator.py            # (keep)   lifecycle exclusive GPU lease; CPU-mode no-op; VRAM observability
 │   └── window_result_store.py             # (added)  persist each window's PageResults; replay them on resume
 │
 └── page_result_builders/                  ──▶  WHAT each page becomes
@@ -183,7 +183,7 @@ stage2_page_extraction/
 | `conversion_engines/conversion_engine_router.py` | `resilient_conversion_engine.py` | "Router" **collides** with Stage 1's `engine_routing`, which picks the engine *per document*. This component does something different: it *runs* the chosen engine and *degrades to Docling on failure*. It is cleanest modeled as a decorator that **itself implements `AbstractConversionEngine`**, so the orchestrator just sees "an engine" and never knows a fallback happened. |
 | *(none)* | `conversion_engine_factory.py` *(new)* | Separates **construction** (which class, which config) from **execution**. Keeps the orchestrator from importing concrete engine classes — dependency inversion, trivial to stub in tests. |
 | `windowed_extraction_orchestrator.py` *(loose)* | `windowed_extraction/windowed_page_extraction_orchestrator.py` | Grouped with its two collaborators into one sub-package. |
-| `gpu_window_scheduler.py` *(loose)* | `windowed_extraction/gpu_window_scheduler.py` | It is part of the loop, not a standalone top-level concern. |
+| `gpu_engine_resource_coordinator.py` *(loose)* | `windowed_extraction/gpu_engine_resource_coordinator.py` | It is part of the loop, not a standalone top-level concern. |
 | *(none)* | `windowed_extraction/page_window_planner.py` *(new)* | **Pure, synchronous, no I/O.** Given total pages, window size, and the checkpoint's `last_completed_page`, it returns the windows still to run. Splitting this out makes resume logic unit-testable *without a GPU or an engine* — a major debuggability win. |
 | `page_element_extractors/` | `page_result_builders/` | "Extractors" overlaps with the engines (which also extract). These helpers don't touch the document — they *shape* raw engine artifacts into the canonical `PageResult`. |
 | `markdown_text_extractor.py` | `page_markdown_reader.py` | It *reads* the markdown the engine already wrote; "reader" says exactly that. |
@@ -252,10 +252,10 @@ saying page 240 is done, which windows still need running?* (Answer:
 resume math can be tested in milliseconds — and resume math is exactly the kind of
 off-by-one logic that is miserable to debug if it's tangled into the async loop.
 
-**`gpu_window_scheduler.py`** wraps each window in the exclusive GPU context (so only
-one engine ever holds VRAM), runs the VRAM budget preflight check, and enforces the
-`max_concurrent_windows` bound. It is the gatekeeper between "we want to process this
-window" and "the GPU is actually ours to use right now."
+**`gpu_engine_resource_coordinator.py`** wraps the engine lifecycle in the exclusive GPU context (so only
+one live engine owns VRAM), and records VRAM before startup and each window. It is
+the gatekeeper between "we want to run this engine" and "the GPU is actually ours to
+use right now."
 
 **`window_result_store.py`** persists each window's `PageResult`s to its result
 folder (one JSON per page) and reads them back. This earns its place because correct
@@ -363,9 +363,10 @@ plan adjusts.)
  │  3. page_window_planner(total_pages, window_size, last_completed_page) │
  │       └─ [ [9..16], [17..24], … ]   (already-done windows skipped)     │
  │                                                                        │
- │  4. async with engine:            # start(): load models / spawn proc  │
- │       for window in windows:                                           │
- │         ├─ gpu_window_scheduler.acquire()    # exclusive GPU + VRAM    │
+ │  4. async with gpu_engine_resource_coordinator.engine_lifecycle():     │
+ │       async with engine:        # start adapter / spawn subprocess     │
+ │        for window in windows:                                          │
+ │         ├─ gpu_engine_resource_coordinator.observe_window_start()      │
  │         ├─ async for raw_page in engine.convert_window(...):           │
  │         │     page_result_builder →                                    │
  │         │        page_markdown_reader · figure_token_injector ·        │
@@ -389,7 +390,7 @@ The key properties this flow guarantees, and where each comes from:
 | **Memory-bounded** | windows of `window_size` pages; results streamed and released, never all held at once |
 | **Resumable** | checkpoint written after each window; `page_window_planner` skips completed windows on restart |
 | **Fault-tolerant** | `resilient_conversion_engine` + circuit breaker → Docling fallback, with `is_degraded` flagged |
-| **GPU-safe** | `gpu_window_scheduler` acquires the exclusive GPU context per window |
+| **GPU-safe** | `gpu_engine_resource_coordinator` acquires the exclusive GPU context for the engine lifecycle |
 | **Consistent output** | both engines build `PageResult` through the *same* `page_result_builders/` |
 | **Observable** | one `PerPageConversionEventLogger` event per completed page |
 
@@ -422,7 +423,7 @@ Each step is independently testable, so problems surface early and in isolation:
 4. **`mineru_subprocess_engine`** — subprocess lifecycle, health-check polling, HTTP.
 5. **`resilient_conversion_engine`** — wire circuit breaker / retry / timeout; *force* a
    trip to prove Docling fallback and `is_degraded`.
-6. **`gpu_window_scheduler`** — exclusivity + VRAM budget under real load.
+6. **`gpu_engine_resource_coordinator`** — exclusivity + VRAM budget under real load.
 7. **Orchestrator `run_stage2`** + a `STAGE_2_GUIDE.md` written in the same plain-English
    style as Stage 1, once the behavior is real and verified.
 

@@ -15,13 +15,18 @@ Every window sent to the primary engine is protected by the three fault-toleranc
 primitives the project already provides:
 
   * a **timeout** so one stuck window cannot hang the whole run,
-  * **retries** with backoff for transient failures within that window, and
+  * **retries** with backoff for transient non-timeout failures within that window, and
   * a **circuit breaker** that, after repeated failures, stops hammering a broken
     primary and routes work to the fallback instead.
 
+Timeouts are deliberately terminal for a window. Retrying after a cancellation can
+overlap with work that an in-process engine could not stop immediately, which is less
+resilient than degrading the whole window cleanly.
+
 When the primary cannot deliver a window — it errors past its retries, or the breaker
-is open — the whole window is re-run on the fallback engine, and every page from the
-fallback is marked ``is_degraded`` so operators can measure the accuracy impact.
+is open — the wrapper stops the primary, starts the fallback, and commits the rest of
+the run to that fallback. Every fallback page is marked ``is_degraded`` so operators
+can measure the accuracy impact.
 
 Why a whole window at a time
 ----------------------------
@@ -42,6 +47,7 @@ from ...contracts.exceptions import (
     CircuitBreakerOpenError,
     EngineError,
     EngineFallbackExhaustedError,
+    EngineTimeoutError,
 )
 from ...contracts.pipeline_domain_types import ExtractionEngine, PageResult
 from ...fault_tolerance import (
@@ -51,6 +57,14 @@ from ...fault_tolerance import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _NonRetryableEngineError(Exception):
+    """Internal sentinel used to keep terminal engine failures out of retry loops."""
+
+    def __init__(self, original: EngineError) -> None:
+        super().__init__(str(original))
+        self.original = original
 
 
 class ResilientConversionEngine(AbstractConversionEngine):
@@ -77,6 +91,7 @@ class ResilientConversionEngine(AbstractConversionEngine):
         self._circuit_breaker = circuit_breaker
         self._retry = retry
         self._timeout_guard = timeout_guard
+        self._primary_active = False
         self._fallback_started = False
 
     @property
@@ -86,17 +101,27 @@ class ResilientConversionEngine(AbstractConversionEngine):
 
     async def start(self) -> None:
         """Start the primary engine. The fallback is started lazily, only if needed."""
-        await self._primary.start()
+        async with self._timeout_guard.engine_startup(
+            component_name=self._primary.engine_type.value
+        ):
+            await self._primary.start()
+        self._primary_active = True
 
     async def stop(self) -> None:
         """Stop both engines. Idempotent — safe even if the fallback never started."""
-        await self._primary.stop()
-        if self._fallback is not None and self._fallback_started:
-            await self._fallback.stop()
-            self._fallback_started = False
+        try:
+            if self._primary_active:
+                await self._primary.stop()
+                self._primary_active = False
+        finally:
+            if self._fallback is not None and self._fallback_started:
+                await self._fallback.stop()
+                self._fallback_started = False
 
     async def is_available(self) -> bool:
         """Available while the primary is usable, or the breaker is open but a fallback exists."""
+        if self._fallback_started:
+            return self._fallback is not None and await self._fallback.is_available()
         if not self._circuit_breaker.is_open:
             return await self._primary.is_available()
         return self._fallback is not None
@@ -118,7 +143,11 @@ class ResilientConversionEngine(AbstractConversionEngine):
         if not page_numbers:
             return
 
-        if self._circuit_breaker.is_open:
+        if self._fallback_started:
+            window_pages = await self._convert_window_via_fallback(
+                page_numbers, document_path, output_dir
+            )
+        elif self._circuit_breaker.is_open:
             logger.info(
                 "stage2.engine.breaker_open primary=%s -> using fallback",
                 self._primary.engine_type.value,
@@ -158,8 +187,9 @@ class ResilientConversionEngine(AbstractConversionEngine):
         Run the whole window on the primary, guarded by timeout, retry, and breaker.
 
         Composition (inside-out): a single timeout-bounded attempt → retried on
-        transient ``EngineError`` → the retried operation counted by the circuit
-        breaker, so a window that fails even after retries trips the breaker once.
+        transient, non-timeout ``EngineError`` → the retried operation counted by the
+        circuit breaker, so a window that fails even after retries trips the breaker
+        once.
         """
 
         async def _timed_attempt() -> list[PageResult]:
@@ -173,8 +203,17 @@ class ResilientConversionEngine(AbstractConversionEngine):
                     )
                 ]
 
+        async def _retryable_timed_attempt() -> list[PageResult]:
+            try:
+                return await _timed_attempt()
+            except EngineTimeoutError as exc:
+                raise _NonRetryableEngineError(exc) from exc
+
         async def _retried_attempt() -> list[PageResult]:
-            return await self._retry.call_async(_timed_attempt, on=EngineError)
+            try:
+                return await self._retry.call_async(_retryable_timed_attempt, on=EngineError)
+            except _NonRetryableEngineError as exc:
+                raise exc.original from exc
 
         return await self._circuit_breaker.call_async(_retried_attempt)
 
@@ -203,7 +242,7 @@ class ResilientConversionEngine(AbstractConversionEngine):
                 context={"primary_engine": self._primary.engine_type.value},
             ) from primary_failure
 
-        await self._ensure_fallback_started()
+        await self._switch_to_fallback()
         fallback_pages = [
             page_result
             async for page_result in self._fallback.convert_window(
@@ -213,8 +252,20 @@ class ResilientConversionEngine(AbstractConversionEngine):
         # PageResult is frozen; produce degraded copies rather than mutating.
         return [page_result.model_copy(update={"is_degraded": True}) for page_result in fallback_pages]
 
+    async def _switch_to_fallback(self) -> None:
+        """Stop the primary and start the fallback exactly once for this run."""
+        if self._fallback_started:
+            return
+        if self._primary_active:
+            await self._primary.stop()
+            self._primary_active = False
+        await self._ensure_fallback_started()
+
     async def _ensure_fallback_started(self) -> None:
         """Start the fallback engine once, on first use, to avoid loading two engines upfront."""
         if self._fallback is not None and not self._fallback_started:
-            await self._fallback.start()
+            async with self._timeout_guard.engine_startup(
+                component_name=self._fallback.engine_type.value
+            ):
+                await self._fallback.start()
             self._fallback_started = True

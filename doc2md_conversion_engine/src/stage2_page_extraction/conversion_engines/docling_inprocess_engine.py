@@ -13,7 +13,7 @@ What this adapter does
 It wraps Docling's ``DocumentConverter`` behind the pipeline's ``AbstractConversion
 Engine`` interface so the rest of Stage 2 can drive it without knowing it is Docling:
 
-  * ``start``  loads the converter once (models into memory / onto the GPU),
+  * ``start``  builds the converter and validates Docling imports once,
   * ``convert_window`` converts a contiguous page range and yields one ``PageResult``
     per page, and
   * ``stop``   drops the converter and frees GPU memory.
@@ -27,8 +27,8 @@ that page's images out of the converted document; the shared page-result builder
 turns figure placeholders into tokens and scans tables. That keeps Docling's output
 identical in shape to MinerU's.
 
-Blocking work (model load, conversion) runs in a worker thread via ``asyncio.to_
-thread`` so it never stalls the orchestrator's event loop.
+Blocking conversion work runs in a worker thread via ``asyncio.to_thread`` so it
+never stalls the orchestrator's event loop.
 """
 
 from __future__ import annotations
@@ -36,8 +36,10 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import os
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -52,6 +54,14 @@ if TYPE_CHECKING:
     from docling.document_converter import DocumentConverter
 
 logger = logging.getLogger(__name__)
+
+_DOCLING_LAYOUT_REPO_ID = "docling-project/docling-layout-heron"
+_DOCLING_LAYOUT_REVISION = "main"
+_REQUIRED_DOCLING_LAYOUT_FILES = (
+    "model.safetensors",
+    "config.json",
+    "preprocessor_config.json",
+)
 
 
 class DoclingInProcessEngine(AbstractConversionEngine):
@@ -78,21 +88,27 @@ class DoclingInProcessEngine(AbstractConversionEngine):
 
     async def start(self) -> None:
         """
-        Build the converter and load its models once; subsequent calls are a no-op.
+        Build the converter once; subsequent calls are a no-op.
 
-        Model loading (download + into VRAM) happens here, in ``start()``, on purpose:
-        it is one-time warmup that must not count against the per-window extraction
-        timeout. Doing it lazily on the first ``convert_window`` would fold a slow
-        first-run model download into a timed window and trip the timeout.
+        Heavy model loading happens during the first conversion window, under the
+        engine lifecycle's exclusive GPU lease and the configured window timeout. That
+        keeps startup cheap and prevents a model warmup from running outside Stage 2's
+        GPU ownership boundary.
         """
         if self._converter is not None:
             return
         try:
-            self._converter = await asyncio.to_thread(self._build_and_warm_converter)
+            self._ensure_required_models_available()
+            self._converter = self._build_converter()
+        except EngineStartupError:
+            raise
         except Exception as exc:  # model download / load / import failure
             raise EngineStartupError(
-                "Docling engine failed to initialise (model load or import error).",
-                context={"engine": ExtractionEngine.DOCLING.value},
+                "Docling engine failed to initialise.",
+                context={
+                    "engine": ExtractionEngine.DOCLING.value,
+                    "allow_model_downloads": self._config.allow_model_downloads,
+                },
             ) from exc
 
     async def stop(self) -> None:
@@ -128,9 +144,10 @@ class DoclingInProcessEngine(AbstractConversionEngine):
             return
 
         window_output_dir = Path(output_dir)
-        converted_document = await asyncio.to_thread(
-            self._convert_page_range, document_path, page_numbers[0], page_numbers[-1]
-        )
+        with _huggingface_download_policy(allow_downloads=self._config.allow_model_downloads):
+            converted_document = await asyncio.to_thread(
+                self._convert_page_range, document_path, page_numbers[0], page_numbers[-1]
+            )
 
         for page_number in page_numbers:
             started_at = time.perf_counter()
@@ -150,19 +167,38 @@ class DoclingInProcessEngine(AbstractConversionEngine):
     # Docling-specific internals (run inside worker threads)
     # ------------------------------------------------------------------
 
-    def _build_and_warm_converter(self) -> DocumentConverter:
+    def _ensure_required_models_available(self) -> None:
         """
-        Build the converter and eagerly load its PDF pipeline models.
+        Fail clearly when Docling's required local models are missing.
 
-        ``initialize_pipeline`` forces the layout and table models to download and
-        load now (during ``start()``), so the per-window timeout later covers only
-        page extraction.
+        Letting ``snapshot_download`` run inside conversion makes Stage 2 look hung
+        when the host has no route to Hugging Face/Xet. Runtime downloads can still be
+        enabled explicitly for development machines.
         """
-        from docling.datamodel.base_models import InputFormat
+        if self._config.allow_model_downloads:
+            return
 
-        converter = self._build_converter()
-        converter.initialize_pipeline(InputFormat.PDF)
-        return converter
+        missing_files = _missing_huggingface_cache_files(
+            repo_id=_DOCLING_LAYOUT_REPO_ID,
+            revision=_DOCLING_LAYOUT_REVISION,
+            filenames=_REQUIRED_DOCLING_LAYOUT_FILES,
+        )
+        if not missing_files:
+            return
+
+        incomplete_files = _incomplete_huggingface_cache_files(_DOCLING_LAYOUT_REPO_ID)
+        raise EngineStartupError(
+            "Docling layout model is not fully available in the local Hugging Face cache. "
+            "Pre-download the model or set docling_engine.allow_model_downloads=true "
+            "for a development run with network access.",
+            context={
+                "engine": ExtractionEngine.DOCLING.value,
+                "repo_id": _DOCLING_LAYOUT_REPO_ID,
+                "revision": _DOCLING_LAYOUT_REVISION,
+                "missing_files": missing_files,
+                "incomplete_files": incomplete_files,
+            },
+        )
 
     def _build_converter(self) -> DocumentConverter:
         """Construct a Docling ``DocumentConverter`` from the engine config + device."""
@@ -240,3 +276,60 @@ def _encode_png(pil_image: Any) -> bytes:
     buffer = io.BytesIO()
     pil_image.save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def _missing_huggingface_cache_files(
+    *,
+    repo_id: str,
+    revision: str,
+    filenames: tuple[str, ...],
+) -> list[str]:
+    """Return required model files absent from the local Hugging Face cache."""
+    from huggingface_hub import try_to_load_from_cache
+
+    missing: list[str] = []
+    for filename in filenames:
+        cached_path = try_to_load_from_cache(repo_id, filename, revision=revision)
+        if cached_path is None or not Path(cached_path).is_file():
+            missing.append(filename)
+    return missing
+
+
+def _incomplete_huggingface_cache_files(repo_id: str) -> list[str]:
+    """Return partial downloads for ``repo_id`` from the default Hugging Face cache."""
+    cache_root = Path.home() / ".cache" / "huggingface" / "hub"
+    repo_cache_dir = cache_root / f"models--{repo_id.replace('/', '--')}"
+    if not repo_cache_dir.exists():
+        return []
+    return sorted(str(path) for path in repo_cache_dir.glob("blobs/*.incomplete"))
+
+
+@contextmanager
+def _huggingface_download_policy(*, allow_downloads: bool) -> Iterator[None]:
+    """
+    Keep Hugging Face offline during conversion unless runtime downloads are allowed.
+
+    The environment variable is restored afterwards so this engine does not leak a
+    process-wide policy into unrelated code.
+    """
+    if allow_downloads:
+        yield
+        return
+
+    previous_offline = os.environ.get("HF_HUB_OFFLINE")
+    previous_xet = os.environ.get("HF_HUB_DISABLE_XET")
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["HF_HUB_DISABLE_XET"] = "1"
+    try:
+        yield
+    finally:
+        _restore_env_var("HF_HUB_OFFLINE", previous_offline)
+        _restore_env_var("HF_HUB_DISABLE_XET", previous_xet)
+
+
+def _restore_env_var(name: str, value: str | None) -> None:
+    """Restore or remove one environment variable."""
+    if value is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = value

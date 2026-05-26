@@ -11,17 +11,17 @@ The loop, in one breath
 ------------------------
 Work out where to resume from (the checkpoint, validated against disk), figure out
 which windows are left, build the engine Stage 1 chose (wrapped so it falls back to
-Docling on failure), then for each remaining window: take the GPU lease, convert the
-window's pages, hand each finished page downstream, and once the window is done write
-a checkpoint so a crash can resume from here. When the last window finishes, delete
-the checkpoint — the run is complete.
+Docling on failure), take the GPU lease for that engine's lifetime, and then for each
+remaining window: convert the window's pages, hand each finished page downstream, and
+once the window is done write a checkpoint so a crash can resume from here. When the
+last window finishes, delete the checkpoint — the run is complete.
 
 What it guarantees
 ------------------
   * memory-bounded — only one window's pages are in flight at a time,
   * resumable      — a checkpoint after every window, validated on restart,
   * fault-tolerant — the engine degrades to Docling rather than failing the document,
-  * GPU-safe       — one engine on the GPU at a time, via the window lease,
+  * GPU-safe       — one live engine on the GPU at a time,
   * observable     — one audit event per completed page.
 
 It yields ``PageResult`` objects as a stream, so Stage 3 (figures) and Stage 4
@@ -36,6 +36,7 @@ from pathlib import Path
 
 from ...checkpointing import CheckpointResumeStateLoader, WindowedCheckpointFileStore
 from ...contracts.configurations.pipeline_config import PipelineConfig
+from ...contracts.conversion_engine_interface import AbstractConversionEngine
 from ...contracts.exceptions import DocumentError
 from ...contracts.pipeline_domain_types import (
     ConversionJob,
@@ -48,7 +49,7 @@ from ...fault_tolerance import AsyncOperationTimeoutGuard
 from ...gpu_resource_management import GPUVRAMUsageMonitor
 from ...observability import PerPageConversionEventLogger
 from ..conversion_engines import ConversionEngineFactory
-from .gpu_window_scheduler import GpuWindowScheduler
+from .gpu_engine_resource_coordinator import GpuEngineResourceCoordinator
 from .page_window_planner import PageWindow, plan_remaining_windows
 from .window_result_store import load_window_page_results, persist_page_result
 
@@ -112,38 +113,59 @@ class WindowedPageExtractionOrchestrator:
         )
 
         engine = self._engine_factory.build_engine(job, classification)
-        scheduler = GpuWindowScheduler(
+        gpu_resources = GpuEngineResourceCoordinator(
             self._config.gpu,
             self._vram_monitor,
             self._timeout_guard,
             component_name=f"stage2.engine.{classification.engine.value}",
         )
 
-        async with engine:
-            for window in remaining_windows:
-                window_results: list[PageResult] = []
-                window_output_dir = self._prepare_window_dir(job, window)
-
-                async with scheduler.lease_for_window(window.index):
-                    async for page_result in engine.convert_window(
-                        window.page_numbers, str(job.document_path), str(window_output_dir)
-                    ):
-                        # Persist before streaming so a finished page is durable on disk
-                        # the moment the consumer sees it.
-                        persist_page_result(window_output_dir, page_result)
-                        self._page_event_logger.log_page_completed(job, page_result)
-                        window_results.append(page_result)
-                        yield page_result
-
-                await self._checkpoint_completed_window(
-                    store=checkpoint_store,
-                    state=checkpoint_state,
-                    window=window,
-                    window_output_dir=window_output_dir,
-                    window_results=window_results,
-                )
+        async with gpu_resources.engine_lifecycle(), engine:
+            async for page_result in self._extract_remaining_windows(
+                job=job,
+                engine=engine,
+                gpu_resources=gpu_resources,
+                remaining_windows=remaining_windows,
+                checkpoint_store=checkpoint_store,
+                checkpoint_state=checkpoint_state,
+            ):
+                yield page_result
 
         await self._finalize(checkpoint_store, job.job_id)
+
+    async def _extract_remaining_windows(
+        self,
+        *,
+        job: ConversionJob,
+        engine: AbstractConversionEngine,
+        gpu_resources: GpuEngineResourceCoordinator,
+        remaining_windows: list[PageWindow],
+        checkpoint_store: WindowedCheckpointFileStore,
+        checkpoint_state: CheckpointState,
+    ) -> AsyncGenerator[PageResult, None]:
+        """Convert, persist, stream, and checkpoint each remaining window."""
+        for window in remaining_windows:
+            window_results: list[PageResult] = []
+            window_output_dir = self._prepare_window_dir(job, window)
+            gpu_resources.observe_window_start(window.index)
+
+            async for page_result in engine.convert_window(
+                window.page_numbers, str(job.document_path), str(window_output_dir)
+            ):
+                # Persist before streaming so a finished page is durable on disk
+                # the moment the consumer sees it.
+                persist_page_result(window_output_dir, page_result)
+                self._page_event_logger.log_page_completed(job, page_result)
+                window_results.append(page_result)
+                yield page_result
+
+            await self._checkpoint_completed_window(
+                store=checkpoint_store,
+                state=checkpoint_state,
+                window=window,
+                window_output_dir=window_output_dir,
+                window_results=window_results,
+            )
 
     # ------------------------------------------------------------------
     # Helpers
