@@ -267,9 +267,33 @@ class Table(BaseModel):
     the header row appears on page N and data rows continue on page N+1.
     The ``is_fragment`` flag tells the assembler to buffer this table and
     wait for its continuation before emitting the merged result.
+
+    Deferred assembly via a token
+    -----------------------------
+    Like figures, a table is lifted out of the page Markdown during Stage 2 and
+    replaced by a ``token`` placeholder; the table's own Markdown is carried here.
+    Stage 4 substitutes the token with the table's final Markdown — merged first
+    when the table spans pages. Anchoring the position with a token (rather than
+    leaving the table inline) means Stage 4 reassembles by token lookup, never by
+    fragile string-matching of table text inside the page.
+
+    Token format
+    ------------
+    ``${TBL:<document_id>:<page_number>:<index_on_page>}``
+
+    Example: ``${TBL:sha256abc:042:0}``
     """
 
     model_config = ConfigDict(frozen=True)
+
+    token: str = Field(
+        ...,
+        description=(
+            "Unique placeholder string embedded in the page Markdown in place of "
+            "this table.  Stage 4 replaces it with the table's (possibly merged) "
+            "Markdown."
+        ),
+    )
 
     page_number: int = Field(..., ge=1)
 
@@ -295,6 +319,15 @@ class Table(BaseModel):
             "when this is a continuation fragment of a multi-page table."
         ),
     )
+
+    @field_validator("token")
+    @classmethod
+    def _validate_token_format(cls, v: str) -> str:
+        if not (v.startswith("${TBL:") and v.endswith("}")):
+            raise ValueError(
+                f"Table token must match ${{TBL:<doc_id>:<page>:<index>}}, got: {v!r}"
+            )
+        return v
 
 
 class PageResult(BaseModel):

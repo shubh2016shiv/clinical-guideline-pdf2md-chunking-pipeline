@@ -37,6 +37,8 @@ The next step, ``engine_routing``, reads the profile produced here and decides
 which conversion engine should process the document.
 """
 
+from typing import TYPE_CHECKING
+
 # The evidence models are pure data with no dependencies, so importing them here
 # is always safe. They are imported eagerly because the sibling ``engine_routing``
 # package depends on them — keeping this import light is what lets the two
@@ -53,6 +55,14 @@ from .feature_evidence_models import (
     VisualCandidateKind,
     VisualEvidence,
 )
+
+# Visible to type checkers as a normal symbol of this package; loaded lazily at
+# runtime by ``__getattr__`` below to break the import cycle. This is the standard
+# pattern for a re-export whose eager import would deadlock — the name resolves for
+# static analysis (pyright/mypy) and for callers, without forcing the import at
+# package-init time.
+if TYPE_CHECKING:
+    from .document_feature_extractor import DocumentFeatureExtractor
 
 __all__ = [
     "DocumentFeatureExtractor",
