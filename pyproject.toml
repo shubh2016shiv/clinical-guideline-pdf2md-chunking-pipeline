@@ -3,9 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "clinical-guideline-pipeline"
+# Distribution name matches the top-level Python package
+# (``doc2md_conversion_engine``) so ``pip install`` and ``import`` use a
+# consistent vocabulary.  No corpus-specific framing — the pipeline is
+# format- and domain-agnostic across the registered ``format_extractors``
+# (PDF, DOCX, PPTX, HTML at the time of writing).
+name = "doc2md-conversion-engine"
 version = "2.0.0"
-description = "Clinical Guidelines PDF-to-Markdown Conversion and Parent-Child Chunking Pipeline"
+description = "Format-agnostic document-to-Markdown conversion pipeline with windowed page extraction, VLM figure summarization, atomic assembly, and downstream parent-child chunking."
 readme = "INSTALLATION.md"
 license = { text = "MIT" }
 authors = [
@@ -14,7 +19,11 @@ authors = [
 requires-python = ">=3.12,<3.14"
 classifiers = [
     "Development Status :: 4 - Beta",
-    "Intended Audience :: Healthcare Industry",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: Science/Research",
+    "Topic :: Text Processing :: Markup :: Markdown",
+    "Topic :: Software Development :: Libraries :: Python Modules",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",

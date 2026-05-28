@@ -74,9 +74,9 @@ class DocumentSHA256Hasher:
     Instantiate once per pipeline run with the configured constraints::
 
         hasher = DocumentSHA256Hasher(config.document_constraints)
-        result = hasher.compute(Path("/uploads/Headache.pdf"))
+        result = hasher.compute(Path("/path/to/document.<ext>"))
         # result.sha256_hex  → "e3b0c44298fc1c14..."
-        # result.document_type → DocumentType.PDF
+        # result.document_type → the matching DocumentType (PDF/DOCX/PPTX/HTML)
     """
 
     def __init__(self, constraints: DocumentConstraintsConfig) -> None:

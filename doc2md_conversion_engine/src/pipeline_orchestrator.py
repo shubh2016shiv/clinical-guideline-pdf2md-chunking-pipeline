@@ -24,9 +24,9 @@ Usage
     config = PipelineConfig()
     orchestrator = PipelineOrchestrator(config)
 
-    result = orchestrator.run_stage1(Path("/data/Headache.pdf"))
-    print(result.engine)           # "mineru"
-    print(result.complexity_score) # 3.25
+    result = orchestrator.run_stage1(Path("/path/to/document.<ext>"))
+    print(result.engine)           # e.g. "mineru" or "docling"
+    print(result.complexity_score) # routing score; engine-dependent
 """
 
 from __future__ import annotations
@@ -179,7 +179,7 @@ class PipelineOrchestrator:
     Instantiate once per application lifetime::
 
         orchestrator = PipelineOrchestrator(PipelineConfig())
-        result = orchestrator.run_stage1(Path("/data/Headache.pdf"))
+        result = orchestrator.run_stage1(Path("/path/to/document.<ext>"))
     """
 
     def __init__(self, config: PipelineConfig) -> None:

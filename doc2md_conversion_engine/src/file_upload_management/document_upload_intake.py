@@ -63,7 +63,7 @@ class DocumentUploadIntake:
     Instantiate once with the document constraints from the pipeline config::
 
         intake = DocumentUploadIntake(config.document_constraints)
-        intake.validate(Path("/uploads/Headache.pdf"))
+        intake.validate(Path("/path/to/document.<ext>"))
         # returns None on success
         # raises DocumentError or DocumentTooLargeError on invalid input
     """

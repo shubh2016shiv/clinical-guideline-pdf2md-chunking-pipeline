@@ -381,88 +381,6 @@ wheels = [
 ]
 
 [[package]]
-name = "clinical-guideline-pipeline"
-version = "2.0.0"
-source = { editable = "." }
-dependencies = [
-    { name = "aiobreaker" },
-    { name = "docling" },
-    { name = "google-generativeai" },
-    { name = "mineru", extra = ["core"] },
-    { name = "nvidia-ml-py" },
-    { name = "ollama" },
-    { name = "openai" },
-    { name = "pandas" },
-    { name = "pathvalidate" },
-    { name = "pdfplumber" },
-    { name = "pillow" },
-    { name = "prometheus-client" },
-    { name = "psutil" },
-    { name = "pydantic-settings", extra = ["yaml"] },
-    { name = "pymupdf" },
-    { name = "pymupdf-layout" },
-    { name = "stamina" },
-    { name = "streamlit" },
-    { name = "tabulate" },
-    { name = "tiktoken" },
-    { name = "torch" },
-    { name = "torchvision" },
-    { name = "tqdm" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pyright" },
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pyright" },
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiobreaker", specifier = ">=1.2.0" },
-    { name = "docling", specifier = ">=2.95.0" },
-    { name = "google-generativeai", specifier = "==0.5.4" },
-    { name = "mineru", extras = ["core"], specifier = ">=3.1.0" },
-    { name = "nvidia-ml-py", specifier = ">=12.0.0" },
-    { name = "ollama", specifier = ">=0.6.2" },
-    { name = "openai", specifier = ">=1.0.0" },
-    { name = "pandas", specifier = ">=2.3.3,<4.0.0" },
-    { name = "pathvalidate", specifier = ">=3.0.0" },
-    { name = "pdfplumber", specifier = ">=0.11.0" },
-    { name = "pillow", specifier = ">=11.0.0,<13.0.0" },
-    { name = "prometheus-client", specifier = ">=0.21.0" },
-    { name = "psutil", specifier = ">=5.9.0" },
-    { name = "pydantic-settings", extras = ["yaml"], specifier = ">=2.7.0" },
-    { name = "pymupdf", specifier = ">=1.24.0" },
-    { name = "pymupdf-layout", specifier = ">=1.27.2.3" },
-    { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.400" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.0" },
-    { name = "stamina", specifier = ">=26.1.0" },
-    { name = "streamlit", specifier = ">=1.41.0" },
-    { name = "tabulate", specifier = ">=0.10.0" },
-    { name = "tiktoken", specifier = "==0.7.0" },
-    { name = "torch", specifier = ">=2.6.0,<3.0.0", index = "https://download.pytorch.org/whl/cu124" },
-    { name = "torchvision", specifier = ">=0.21.0,<1.0.0", index = "https://download.pytorch.org/whl/cu124" },
-    { name = "tqdm", specifier = ">=4.66.4" },
-]
-provides-extras = ["dev"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pyright", specifier = ">=1.1.400" },
-    { name = "pytest", specifier = ">=8.3.0" },
-    { name = "ruff", specifier = ">=0.11.0" },
-]
-
-[[package]]
 name = "cobble"
 version = "0.1.4"
 source = { registry = "https://pypi.org/simple" }
@@ -556,6 +474,88 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fc/f8/98eea607f65de6527f8a2e8885fc8015d3e6f5775df186e443e0964a11c3/distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed", size = 60722, upload-time = "2023-12-24T09:54:32.31Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl", hash = "sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2", size = 20277, upload-time = "2023-12-24T09:54:30.421Z" },
+]
+
+[[package]]
+name = "doc2md-conversion-engine"
+version = "2.0.0"
+source = { editable = "." }
+dependencies = [
+    { name = "aiobreaker" },
+    { name = "docling" },
+    { name = "google-generativeai" },
+    { name = "mineru", extra = ["core"] },
+    { name = "nvidia-ml-py" },
+    { name = "ollama" },
+    { name = "openai" },
+    { name = "pandas" },
+    { name = "pathvalidate" },
+    { name = "pdfplumber" },
+    { name = "pillow" },
+    { name = "prometheus-client" },
+    { name = "psutil" },
+    { name = "pydantic-settings", extra = ["yaml"] },
+    { name = "pymupdf" },
+    { name = "pymupdf-layout" },
+    { name = "stamina" },
+    { name = "streamlit" },
+    { name = "tabulate" },
+    { name = "tiktoken" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "tqdm" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pyright" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pyright" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiobreaker", specifier = ">=1.2.0" },
+    { name = "docling", specifier = ">=2.95.0" },
+    { name = "google-generativeai", specifier = "==0.5.4" },
+    { name = "mineru", extras = ["core"], specifier = ">=3.1.0" },
+    { name = "nvidia-ml-py", specifier = ">=12.0.0" },
+    { name = "ollama", specifier = ">=0.6.2" },
+    { name = "openai", specifier = ">=1.0.0" },
+    { name = "pandas", specifier = ">=2.3.3,<4.0.0" },
+    { name = "pathvalidate", specifier = ">=3.0.0" },
+    { name = "pdfplumber", specifier = ">=0.11.0" },
+    { name = "pillow", specifier = ">=11.0.0,<13.0.0" },
+    { name = "prometheus-client", specifier = ">=0.21.0" },
+    { name = "psutil", specifier = ">=5.9.0" },
+    { name = "pydantic-settings", extras = ["yaml"], specifier = ">=2.7.0" },
+    { name = "pymupdf", specifier = ">=1.24.0" },
+    { name = "pymupdf-layout", specifier = ">=1.27.2.3" },
+    { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.400" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.0" },
+    { name = "stamina", specifier = ">=26.1.0" },
+    { name = "streamlit", specifier = ">=1.41.0" },
+    { name = "tabulate", specifier = ">=0.10.0" },
+    { name = "tiktoken", specifier = "==0.7.0" },
+    { name = "torch", specifier = ">=2.6.0,<3.0.0", index = "https://download.pytorch.org/whl/cu124" },
+    { name = "torchvision", specifier = ">=0.21.0,<1.0.0", index = "https://download.pytorch.org/whl/cu124" },
+    { name = "tqdm", specifier = ">=4.66.4" },
+]
+provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pyright", specifier = ">=1.1.400" },
+    { name = "pytest", specifier = ">=8.3.0" },
+    { name = "ruff", specifier = ">=0.11.0" },
 ]
 
 [[package]]
