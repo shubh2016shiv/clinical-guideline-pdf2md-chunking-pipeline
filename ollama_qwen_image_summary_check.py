@@ -511,7 +511,7 @@ class AnalyzerConfig:
     ollama_model_name:                str            = "qwen3-vl:4b"
     ollama_host_url:                  str | None     = None
     document_domain:                  DocumentDomain = DocumentDomain.AUTO
-    image_max_side_pixels:            int            = 2048
+    image_max_side_pixels:            int            = 768
     max_structured_output_retries:    int            = 2
     generation_temperature:           float          = 0.0
     generation_top_p:                 float          = 0.1
@@ -685,253 +685,22 @@ class ImagePreprocessor:
 # Module-level constant so the multi-hundred-line prompt string is defined once
 # and referenced by PromptBuilder without duplication.
 _FIGURE_ANALYSIS_BASE_SYSTEM_PROMPT: Final[str] = """\
-You are a universal figure-to-Markdown converter for PDF documents of any domain.
+You are a figure-to-Markdown converter.
+You will be shown one figure image extracted from a PDF document.
+Produce only insertion-ready Markdown. No JSON. No preamble. No explanation of what you are doing.
 
-The source PDF may come from any field: software engineering, clinical medicine,
-scientific research, finance, engineering, law, education, or any other domain.
-Unless a domain context note appears at the end of this prompt, make no assumptions
-about the subject matter and classify what you actually see in the image.
-
-═══════════════════════════════════════════════════════════
-OUTPUT PHILOSOPHY — STRUCTURAL FIDELITY, NOT PROSE SUMMARY
-═══════════════════════════════════════════════════════════
-
-Your primary obligation is to produce a structural Markdown representation that
-mirrors the figure's native form. A prose description is a last resort.
-
-  Code / pseudocode           → Fenced code block  (```python, ```java, ```text …)
-  Decision flowchart          → Mermaid or ASCII diagram in fenced block
-  UML diagram                 → Mermaid diagram  (classDiagram, sequenceDiagram …)
-  Mathematical content        → LaTeX display math  ($$…$$)
-  Data table                  → Markdown table with all rows and columns
-  Chart / graph               → Extracted values in a Markdown table + explanation
-  Statistical plot            → Subgroups, point estimates, CIs, p-values extracted
-  Sequential process          → Numbered Markdown list
-  Timeline / Gantt            → Date-keyed Markdown table
-  Hierarchy / framework       → Indented bullet structure
-  Venn / set diagram          → Set members and overlaps enumerated
-  Illustration                → Visible labels and annotations listed
-  UI / screenshot             → Panel-and-control hierarchy as indented bullets
-
-Plain-text explanation is the strategy of last resort — use it only when absolutely
-no structural representation is possible.
-
-═══════════════════════════════════════════════════════════
-STEP 1 — CLASSIFY THE FIGURE TYPE
-═══════════════════════════════════════════════════════════
-
-Select the single best figure_type:
-
-decision_algorithm
-  A flowchart or branching decision tree. Defining feature: conditional yes/no
-  branches with arrows leading to different actions or further conditions.
-
-code_or_pseudocode
-  A figure showing computer code, pseudocode, an algorithm listing, shell commands,
-  configuration syntax, a formal grammar, or a regular expression pattern.
-
-uml_diagram
-  Formal UML notation: class diagram, sequence diagram, activity diagram, state
-  machine, use-case diagram, component diagram, or deployment diagram.
-
-architecture_diagram
-  A system architecture, network topology, data-flow diagram, entity-relationship
-  diagram, infrastructure map, or software component map without formal UML notation.
-
-data_table
-  Tabular data rendered as an image, with identifiable rows, columns, and headers.
-
-statistical_plot
-  A plot carrying formal statistical inference: forest plot, Kaplan-Meier curve,
-  plot with confidence intervals, hazard/odds/risk ratios, p-values, or reference
-  lines. The defining feature is visible inference markings.
-
-chart
-  A bar chart, line chart, scatter plot, pie chart, radar chart, histogram, or
-  similar quantitative graph without formal statistical inference markings.
-
-mathematical_expression
-  A standalone equation, formula, matrix, proof, theorem, or system of equations
-  presented as a figure or rendered image block.
-
-process_or_workflow
-  A step-by-step process, procedure, or swim-lane diagram. Defining feature:
-  sequential ordering without conditional branching.
-
-timeline
-  A chronological display: events on a line, milestones, project phases, a roadmap,
-  or a Gantt chart.
-
-conceptual_diagram
-  A framework, taxonomy, hierarchy, nested structure, pathway overview, or
-  colour/shape-coded grouping illustrating relationships without strict process flow.
-
-mind_map
-  A radial or tree diagram branching outward from a central concept.
-
-venn_or_set_diagram
-  Overlapping shapes (circles or other) showing set membership, intersection, or
-  exclusion relationships.
-
-clinical_action_map
-  A figure mapping patient categories, risk levels, or clinical criteria to
-  management actions or treatment decisions — without complex branching logic.
-
-infographic
-  A mixed-media figure combining icons, short text blocks, and layout to summarise
-  a topic. No single structural element dominates.
-
-illustration
-  An anatomical drawing, technical device illustration, labelled photograph, or
-  figure where visual structure and label positions convey the meaning.
-
-screenshot_or_ui
-  A screenshot of an application, dashboard, browser, or terminal; or a UI
-  mockup/wireframe showing interface structure.
-
-map
-  A geographical, geospatial, heat-map, or spatial distribution figure.
-
-decorative
-  A stock photograph, logo, watermark, icon set, or background with no
-  domain-relevant information.
-
-other
-  Anything not matching the descriptions above.
-
-═══════════════════════════════════════════════════════════
-STEP 2 — SELECT THE RENDERING STRATEGY
-═══════════════════════════════════════════════════════════
-
-Apply exactly the rule that matches the figure type you selected:
-
-fenced_code_block
-  Required for: code_or_pseudocode
-  Extract all visible code or pseudocode into a fenced block. Choose the language
-  identifier that best matches the syntax (python, java, c, cpp, sql, bash, r, scala,
-  haskell, text, …). Use `text` when the language is ambiguous. Preserve indentation
-  and line structure exactly as shown. Do not summarise; transcribe.
-
-latex_math_with_explanation
-  Required for: mathematical_expression
-  Render every equation in display LaTeX: $$…$$ . Follow with a brief plain-language
-  gloss of each visible symbol or term if labels are present.
-
-mermaid_diagram_with_explanation
-  For: uml_diagram, decision_algorithm, architecture_diagram, process_or_workflow
-  Render in a fenced ```mermaid block. Choose the appropriate diagram type:
-  flowchart TD, sequenceDiagram, classDiagram, stateDiagram-v2, gantt, erDiagram, …
-  Follow with a concise explanation of the diagram's purpose and key relationships.
-  If the diagram is too complex to represent accurately in Mermaid, fall back to
-  ascii_flow_diagram_with_explanation.
-
-ascii_flow_diagram_with_explanation
-  For: decision_algorithm, architecture_diagram, process_or_workflow, uml_diagram
-  Render in a fenced ```text block using box-and-arrow ASCII art. Follow with a
-  concise explanation of the flow and key decision points.
-
-markdown_table
-  Required for: data_table
-  Reproduce the table exactly: every column header, row label, and cell value.
-  Use <br> inside cells for multi-line content. Do not omit rows or columns.
-
-markdown_table_with_explanation
-  For: clinical_action_map, chart, process_or_workflow, timeline, infographic
-  Provide a short heading, a Markdown table capturing the key structure, then a
-  brief explanation of what the table represents.
-
-hierarchical_bullets_with_explanation
-  For: conceptual_diagram, mind_map, infographic, architecture_diagram
-  Reconstruct the hierarchy level by level using indented Markdown bullet lists.
-  Follow with a brief explanation of the overall structure and its purpose.
-
-numbered_steps_with_explanation
-  For: process_or_workflow, timeline
-  List each step or phase as a numbered Markdown item. Preserve visible labels,
-  durations, icons, and transitions. Follow with a brief explanation.
-
-timeline_table
-  For: timeline
-  Render as a two-column Markdown table: Date or Phase | Event or Description.
-  Follow with a brief explanation.
-
-chart_values_with_explanation
-  For: chart, statistical_plot
-  Identify axes, units, series labels, and legend entries. Extract readable or
-  approximate values into a Markdown table. Label all approximated values explicitly
-  (e.g., "approximately 42"). Follow with a brief explanation.
-
-statistical_plot_extraction
-  For: statistical_plot
-  Extract — only where legible — comparison type, axes and units, reference line
-  value, subgroup labels, point estimates, confidence intervals, p-values, and
-  direction of effect. Present as a Markdown table followed by an explanation.
-
-illustration_labels_with_explanation
-  For: illustration
-  List all visible structural labels, annotations, and callouts using bullet points.
-  Describe the overall subject. Do not infer unlabelled structures.
-
-ui_structure_with_explanation
-  For: screenshot_or_ui
-  Describe the UI hierarchy: panels, sections, controls, labels, and visible data.
-  Use indented bullets to represent nesting. Follow with a brief explanation.
-
-set_overlap_with_explanation
-  For: venn_or_set_diagram
-  Identify each set or circle. List the items or labels visible in each exclusive
-  region and in each overlapping region. Use a table or bullets. Follow with a brief
-  explanation.
-
-plain_text_explanation
-  Fallback only. Use when no structural strategy above can faithfully represent
-  the figure.
-
-decorative_note
-  Required for: decorative
-  Write a single sentence stating that the figure is decorative and carries no
-  domain-relevant information.
-
-═══════════════════════════════════════════════════════════
-STEP 3 — PRODUCE THE markdown_result FIELD
-═══════════════════════════════════════════════════════════
-
-markdown_result must be self-contained and insertion-ready as a Markdown section.
-
-Structure rules:
-  1. Open with a level-3 heading:
-       • `### Figure: <visible title>` when a title is visible in the image.
-       • `### Figure analysis` when no title is visible.
-  2. Apply the selected rendering strategy as the main body content.
-  3. Explanatory prose, if any, follows the structural representation.
-
-Content-preservation rules:
-  • Preserve all visible numbers, thresholds, units, axis labels, legends,
-    abbreviations, annotations, and text exactly as they appear.
-  • Inside Markdown table cells, use `<br>` for multi-line items.
-  • ASCII diagrams and Mermaid diagrams must be inside fenced code blocks.
-  • Code must use a fenced block with the correct language identifier.
-  • Mathematical expressions must use display LaTeX ($$…$$), not inline ($…$).
-  • Do not embed JSON, YAML, metadata, source image path, page number, or
-    SHA-256 anywhere inside markdown_result.
-
-Anti-hallucination rules:
-  • Describe only what is directly visible in the image.
-  • Do not add domain knowledge, recommendations, or inferences not shown.
-  • Write `illegible` for any text, value, or label that cannot be read clearly.
-  • Write `approximately <value>` for numeric values read from a chart axis.
-  • If the figure is only partially legible, state that limitation explicitly in
-    the Markdown.
-
-═══════════════════════════════════════════════════════════
-OUTPUT FORMAT
-═══════════════════════════════════════════════════════════
-
-Return exactly one JSON object conforming to the provided schema.
-  • No Markdown fences around the JSON output.
-  • No prose, commentary, or explanation before or after the JSON.
-  • No reasoning or scratchpad content in the assistant content channel.
-  • Do not include properties absent from the schema.
+Rules:
+- If it is a table → produce a Markdown table with all rows and columns
+- If it is a flowchart or decision tree → produce an ASCII diagram inside a fenced text block
+- If it is a chart or graph → extract all visible values into a Markdown table
+- If it is code or pseudocode → produce a fenced code block with the correct language tag
+- If it is a process or numbered steps → produce a numbered Markdown list
+- If it is a conceptual diagram or hierarchy → produce indented bullet points
+- For any other figure → describe the visible content in plain Markdown prose
+- Start with ### Figure: <visible title> if a title is visible, otherwise ### Figure
+- Preserve all visible numbers, labels, thresholds, units, and text exactly as shown
+- Mark any unreadable text as illegible
+- Do not add any knowledge, recommendations, or content not visible in the image
 """
 
 
@@ -987,9 +756,7 @@ class PromptBuilder:
     }
 
     _INITIAL_USER_PROMPT: ClassVar[str] = (
-        "Convert this figure into a validated JSON object with the schema provided. "
-        "The markdown_result field must contain a high-fidelity, insertion-ready Markdown "
-        "representation that structurally mirrors the figure — not a prose description."
+        "Convert this figure to Markdown now."
     )
 
     def build_system_prompt(self, document_domain: DocumentDomain) -> str:
@@ -1032,14 +799,8 @@ class PromptBuilder:
         formatted_errors   = "\n".join(f"  • {error}" for error in recent_errors)
 
         return (
-            f"{self._INITIAL_USER_PROMPT}\n\n"
-            "⚠ The previous attempt failed JSON schema validation. Correct the output.\n"
-            "Requirements:\n"
-            "  • Return exactly one JSON object — no fences or prose around it.\n"
-            "  • All Markdown content must be inside the markdown_result field.\n"
-            "  • Do not add fields absent from the schema.\n"
-            "  • rendering_strategy must be valid for the chosen figure_type.\n"
-            f"Validation errors from the previous attempt:\n{formatted_errors}"
+            "The previous attempt returned empty output. Try again. "
+            "Convert this figure to Markdown now. Return only Markdown, nothing else."
         )
 
 
@@ -1097,12 +858,10 @@ class OllamaModelGateway:
                     "images":  [str(prepared_image_path)],
                 },
             ],
-            "format":  MODEL_OUTPUT_JSON_SCHEMA,
             "options": generation_options,
         }
 
-        if enable_thinking:
-            call_kwargs["think"] = True
+        call_kwargs["think"] = enable_thinking
 
         response     = self._ollama_client.chat(**call_kwargs)
         raw_content  = self._extract_content_from_response(response).strip()
@@ -1246,8 +1005,16 @@ class FigureMarkdownAnalyzer:
                     user_prompt         = user_prompt,
                     enable_thinking     = thinking_enabled,
                 )
-                model_output = ModelResponseParser.parse_and_validate(raw_model_response)
-                return self._assemble_analysis_record(resolved_image_path, model_output)
+                return FigureAnalysisRecord(
+                    figure_name        = derive_figure_name_from_path(resolved_image_path),
+                    figure_type        = FigureType.OTHER,
+                    rendering_strategy = RenderingStrategy.PLAIN_TEXT_EXPLANATION,
+                    is_informative     = True,
+                    markdown_result    = raw_model_response.strip(),
+                    legibility         = LegibilityLevel.CLEAR,
+                    confidence         = 1.0,
+                    document_domain    = self._config.document_domain if self._config.document_domain != DocumentDomain.AUTO else DocumentDomain.EDUCATIONAL,
+                )
 
             except StructuredOutputError as error:
                 accumulated_errors.extend(error.accumulated_errors)
@@ -1516,7 +1283,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--max-side",
         dest="image_max_side_pixels",
         type=int,
-        default=2048,
+        default=768,
         metavar="PIXELS",
         help="Maximum image side length in pixels after preprocessing.",
     )
@@ -1631,7 +1398,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 record_payload["debug_metadata"] = debug_metadata
 
-            print(json.dumps(record_payload, ensure_ascii=False, indent=2))
+            print(analysis_record.markdown_result)
 
             if output_writer is not None:
                 written_json_path = output_writer.write_json(analysis_record, debug_metadata)
