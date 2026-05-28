@@ -2,7 +2,7 @@
 
 The pipeline is format- and domain-agnostic. The set of supported file
 formats is whatever is registered under
-``doc2md_conversion_engine/src/stage1_document_prescanning/feature_extraction/format_extractors/``
+``doc2md_conversion_engine/stage1_document_prescanning/feature_extraction/format_extractors/``
 — at the time of writing: PDF, DOCX, PPTX, HTML. Stage 1 inspects the
 file's bytes, picks the matching feature extractor, and routes the
 document to the extraction engine best suited for its complexity. Stages
@@ -43,17 +43,17 @@ import asyncio
 import sys
 from pathlib import Path
 
-from doc2md_conversion_engine.src.contracts.configurations.pipeline_config import (
+from doc2md_conversion_engine.contracts.configurations.pipeline_config import (
     PipelineConfig,
 )
-from doc2md_conversion_engine.src.contracts.exceptions import PipelineError
-from doc2md_conversion_engine.src.contracts.figure_summarization_types import (
+from doc2md_conversion_engine.contracts.exceptions import PipelineError
+from doc2md_conversion_engine.contracts.figure_summarization_types import (
     DocumentDomain,
 )
-from doc2md_conversion_engine.src.contracts.pipeline_domain_types import (
+from doc2md_conversion_engine.contracts.pipeline_domain_types import (
     ConversionSummary,
 )
-from doc2md_conversion_engine.src.pipeline_orchestrator import PipelineOrchestrator
+from doc2md_conversion_engine.pipeline_orchestrator import PipelineOrchestrator
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:

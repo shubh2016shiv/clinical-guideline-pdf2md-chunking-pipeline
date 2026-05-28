@@ -7,7 +7,7 @@
 > producing a single `.md` file plus a `ConversionSummary` row of metrics.
 
 This document is the **implementation companion** to the code in
-[`doc2md_conversion_engine/src/stage4_assembly_and_output/`](.). Read it
+[`doc2md_conversion_engine/stage4_assembly_and_output/`](.). Read it
 before opening any file in this directory. It explains what the package
 does, how the pieces are arranged, and which decisions are *load-bearing*
 (changing them changes correctness, not just performance).

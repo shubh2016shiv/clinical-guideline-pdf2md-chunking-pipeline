@@ -18,7 +18,7 @@ Usage
 -----
 ::
 
-    from doc2md_conversion_engine.src.contracts.configurations.pipeline_config import (
+    from doc2md_conversion_engine.contracts.configurations.pipeline_config import (
         PipelineConfig,
     )
 

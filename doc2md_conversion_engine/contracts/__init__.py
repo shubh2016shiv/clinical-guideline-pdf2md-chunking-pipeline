@@ -6,7 +6,7 @@ Public interface of the contracts module.
 Import from here rather than from individual sub-modules so internal
 re-organisations never break callers::
 
-    from doc2md_conversion_engine.src.contracts import (
+    from doc2md_conversion_engine.contracts import (
         PipelineConfig,
         PageResult,
         ConversionJob,

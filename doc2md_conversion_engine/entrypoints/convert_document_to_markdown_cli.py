@@ -38,17 +38,17 @@ import sys
 import time
 from pathlib import Path
 
-from doc2md_conversion_engine.src.contracts.configurations.pipeline_config import (
+from doc2md_conversion_engine.contracts.configurations.pipeline_config import (
     PipelineConfig,
 )
-from doc2md_conversion_engine.src.contracts.exceptions import PipelineError
-from doc2md_conversion_engine.src.contracts.figure_summarization_types import (
+from doc2md_conversion_engine.contracts.exceptions import PipelineError
+from doc2md_conversion_engine.contracts.figure_summarization_types import (
     DocumentDomain,
 )
-from doc2md_conversion_engine.src.contracts.pipeline_domain_types import (
+from doc2md_conversion_engine.contracts.pipeline_domain_types import (
     ConversionSummary,
 )
-from doc2md_conversion_engine.src.pipeline_orchestrator import (
+from doc2md_conversion_engine.pipeline_orchestrator import (
     PipelineOrchestrator,
     Stage1Result,
 )

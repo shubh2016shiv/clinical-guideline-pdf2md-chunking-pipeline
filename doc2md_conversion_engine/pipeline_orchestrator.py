@@ -13,11 +13,11 @@ Usage
 -----
 ::
 
-    from doc2md_conversion_engine.src.pipeline_orchestrator import (
+    from doc2md_conversion_engine.pipeline_orchestrator import (
         PipelineOrchestrator,
         Stage1Result,
     )
-    from doc2md_conversion_engine.src.contracts.configurations.pipeline_config import (
+    from doc2md_conversion_engine.contracts.configurations.pipeline_config import (
         PipelineConfig,
     )
 
