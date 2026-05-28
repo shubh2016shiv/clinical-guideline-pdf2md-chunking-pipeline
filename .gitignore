@@ -16,6 +16,9 @@ venv.bak/
 # IDE and editor files
 .vscode/
 .idea/
+.agents/
+.claude/
+.codex/
 *.swp
 *.swo
 *~
@@ -41,6 +44,7 @@ coverage.xml
 
 # Logs
 *.log
+logs.txt
 logs/
 
 # Temporary files
@@ -50,6 +54,8 @@ temp/
 tmp/
 
 # Output files
+.figure_analyzer_cache/
+doc_assets/
 output/
 out/
 *.json
