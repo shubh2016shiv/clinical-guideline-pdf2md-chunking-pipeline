@@ -44,6 +44,12 @@ from .configurations.vision_llm_client_config import (
     VisionLLMImageBudget,
     VisionLLMProvider,
 )
+from .assembly_interfaces import (
+    AbstractAssembledMarkdownCleaner,
+    AbstractFigureSummaryProvider,
+    AbstractMarkdownOutputSink,
+    AbstractTokenResolver,
+)
 from .figure_summarization_interfaces import (
     AbstractFigureDedupCache,
     AbstractFigureSummaryStore,
@@ -106,6 +112,11 @@ from .windowed_checkpoint_store_interface import (
 )
 
 __all__ = [
+    # Stage 4 interfaces
+    "AbstractFigureSummaryProvider",
+    "AbstractTokenResolver",
+    "AbstractAssembledMarkdownCleaner",
+    "AbstractMarkdownOutputSink",
     # Stage 3 interfaces
     "AbstractVisionFigureClient",
     "AbstractFigureDedupCache",

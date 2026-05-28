@@ -37,11 +37,13 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .contracts.assembly_interfaces import AbstractFigureSummaryProvider
 from .contracts.configurations.pipeline_config import PipelineConfig
 from .contracts.exceptions import DocumentError
-from .contracts.figure_summarization_types import DocumentDomain
+from .contracts.figure_summarization_types import DocumentDomain, FigureSummary
 from .contracts.pipeline_domain_types import (
     ConversionJob,
+    ConversionSummary,
     EngineClassification,
     PageResult,
 )
@@ -58,6 +60,7 @@ from .stage3_figure_summarization import (
     FigureSummarizationCounters,
     FigureSummarizationOrchestrator,
 )
+from .stage4_assembly_and_output import StreamingDocumentAssembler
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +134,25 @@ class DocumentConversionStream:
         that flow straight into :class:`ConversionSummary`.
         """
         return await self.figure_summarization.drain_and_close()
+
+
+class _Stage3FigureSummaryProviderAdapter(AbstractFigureSummaryProvider):
+    """
+    Expose the Stage 3 orchestrator under the read-only Stage 4 contract.
+
+    Stage 4 must not see Stage 3's producer-side methods
+    (``enqueue_figure``, ``drain_and_close``).  This adapter narrows the
+    handle to ``get_summary`` only, enforcing the architectural rule that
+    Stage 4 is a *consumer* of Stage 3, never a co-driver.
+    """
+
+    def __init__(
+        self, figure_summarization: FigureSummarizationOrchestrator
+    ) -> None:
+        self._figure_summarization = figure_summarization
+
+    async def get_summary(self, token: str) -> FigureSummary | None:
+        return await self._figure_summarization.get_summary(token)
 
 
 @dataclass
@@ -288,6 +310,62 @@ class PipelineOrchestrator:
             classification=outcome.classification,
             figure_summarization=stage3,
             page_results=page_generator,
+        )
+
+    async def convert_to_markdown(
+        self,
+        document_path: Path,
+        *,
+        document_domain: DocumentDomain = DocumentDomain.AUTO,
+    ) -> ConversionSummary:
+        """
+        Run the full Stage 1 → 2 → 3 → 4 pipeline and publish the assembled
+        Markdown file atomically.
+
+        Returns the :class:`ConversionSummary` populated with the on-disk
+        path of the published ``.md`` and the figure counters from Stage 3.
+
+        Lifecycle (the contract this method owns)
+        -----------------------------------------
+        1. ``start_conversion`` builds the Stage 3 orchestrator and returns
+           a :class:`DocumentConversionStream`.
+        2. A Stage 4 :class:`StreamingDocumentAssembler` is built against
+           the *same* Stage 3 handle, exposed as a read-only
+           :class:`AbstractFigureSummaryProvider` — Stage 4 cannot
+           accidentally call producer-side Stage 3 methods.
+        3. The assembler's ``run`` consumes ``stream.page_results``.  Each
+           page is iterated to drive Stage 2 *and* enqueue figures into
+           Stage 3 (see :meth:`_page_stream_feeding_stage3`); the assembler
+           polls Stage 3 for each ``${FIG:...}`` token as it arrives.
+        4. After the page stream exhausts, ``stream.finalize()`` drains
+           Stage 3 workers and returns the figure counters.  ``try/finally``
+           ensures Stage 3 is always drained, even if the assembler raises.
+        5. The assembler's ``build_conversion_summary`` folds the counters
+           into the final :class:`ConversionSummary`.
+        """
+        stream = self.start_conversion(
+            document_path, document_domain=document_domain
+        )
+        assembler = StreamingDocumentAssembler.build(
+            job=stream.job,
+            assembly_config=self._config.assembly,
+            fault_tolerance_config=self._config.fault_tolerance,
+            figure_summary_provider=_Stage3FigureSummaryProviderAdapter(
+                stream.figure_summarization
+            ),
+        )
+
+        counters: FigureSummarizationCounters | None = None
+        try:
+            output_markdown_path = await assembler.run(stream.page_results)
+        finally:
+            counters = await stream.finalize()
+
+        return assembler.build_conversion_summary(
+            output_markdown_path=output_markdown_path,
+            figures_summarized=counters.figures_summarized,
+            figures_deduplicated=counters.figures_deduplicated,
+            figures_failed=counters.figures_failed,
         )
 
     async def run_stage2(

@@ -5,24 +5,29 @@ Thin CLI entry point.  All orchestration lives in ``pipeline_orchestrator.py``.
 
 Default behaviour is the **full pipeline** for each document: Stage 1
 (prescan + routing) → Stage 2 (windowed page extraction) → Stage 3
-(figure summarization through the local Ollama VLM).  Stage 4 (assembly)
-is not yet wired into this CLI; the per-document outputs (page Markdown,
-extracted figure images, ``${FIG:...}`` → ``FigureSummary`` map) are
-written to the job's output directory and a future revision will splice
-them into a single assembled Markdown file.
+(figure summarization through the local Ollama VLM) → Stage 4 (token
+substitution + atomic publication).  The final ``<job_id>.md`` is
+written under the job's ``output_dir``; the per-page JSON, extracted
+figure PNGs, and ``${FIG:...}`` → ``FigureSummary`` files remain on disk
+as the auditable, resumable intermediates.
 
-For the legacy diagnostic mode (Stage 1 only — what this CLI did
-historically), pass ``--stage1-only``.
+For the lightweight diagnostic mode (Stage 1 prescan + routing only —
+no GPU extraction, no figure summarization, no assembly), pass
+``--stage1-only``.
 
 Requires the package to be installed (editable mode)::
 
     uv sync                      # one-time: install the package
-    uv run doc2md_conversion_engine/src/entrypoints/convert_document_to_markdown_cli.py \\
-        --doc-folder /home/user/Downloads/research_papers
 
-Or via the registered entry point::
+Then invoke via the registered entry point::
 
-    uv run stage1-prescan --doc-folder /home/user/Downloads/research_papers
+    uv run doc2md --doc-folder /path/to/documents
+    uv run doc2md --doc-folder /path/to/documents --stage1-only
+    uv run doc2md --doc-folder /path/to/documents --recursive
+
+The pipeline is format-agnostic — every file in ``--doc-folder`` whose
+extension matches one of the registered ``format_extractors`` (PDF,
+DOCX, PPTX, HTML at the time of writing) is converted in turn.
 """
 
 from __future__ import annotations
@@ -40,12 +45,12 @@ from doc2md_conversion_engine.src.contracts.exceptions import PipelineError
 from doc2md_conversion_engine.src.contracts.figure_summarization_types import (
     DocumentDomain,
 )
+from doc2md_conversion_engine.src.contracts.pipeline_domain_types import (
+    ConversionSummary,
+)
 from doc2md_conversion_engine.src.pipeline_orchestrator import (
     PipelineOrchestrator,
     Stage1Result,
-)
-from doc2md_conversion_engine.src.stage3_figure_summarization import (
-    FigureSummarizationCounters,
 )
 
 # ---------------------------------------------------------------------------
@@ -85,12 +90,16 @@ def _print_result(result: Stage1Result) -> None:
     print(f"      {'Output:':<18s} {result.output_dir}")
 
 
-def _print_stage3_counters(counters: FigureSummarizationCounters) -> None:
+def _print_conversion_summary(summary: ConversionSummary) -> None:
     print(
         f"      {'Figures:':<18s} "
-        f"summarized={counters.figures_summarized}  "
-        f"deduped={counters.figures_deduplicated}  "
-        f"failed={counters.figures_failed}"
+        f"summarized={summary.figures_summarized}  "
+        f"deduped={summary.figures_deduplicated}  "
+        f"failed={summary.figures_failed}"
+    )
+    print(f"      {'Assembled MD:':<18s} {summary.output_markdown_path}")
+    print(
+        f"      {'Stage 4 wall:':<18s} {summary.total_duration_seconds * 1000:.0f} ms"
     )
 
 
@@ -125,53 +134,41 @@ async def _run_full_pipeline(
     doc_path: Path,
     *,
     document_domain: DocumentDomain,
-) -> tuple[Stage1Result, FigureSummarizationCounters, int]:
+) -> tuple[Stage1Result, ConversionSummary]:
     """
-    Run Stage 1 → 2 → 3 for one document and return the flattened result,
-    Stage 3 counters, and number of pages streamed.
+    Run Stage 1 → 2 → 3 → 4 for one document and return the flattened
+    Stage 1 result plus the final :class:`ConversionSummary`.
 
-    Uses ``PipelineOrchestrator.start_conversion`` — the Stage-3-wired
-    entry point — and is careful to call ``finalize()`` even when the page
-    loop raises, so Stage 3's worker tasks never leak past this call.
+    Delegates to :meth:`PipelineOrchestrator.convert_to_markdown`, which
+    owns the full Stage 3 lifecycle (start, drain, finalize) and the
+    Stage 4 assembly (token substitution, atomic publish).  The CLI just
+    reports what came back.
     """
-    stream = orchestrator.start_conversion(doc_path, document_domain=document_domain)
+    summary = await orchestrator.convert_to_markdown(
+        doc_path, document_domain=document_domain
+    )
 
-    pages_streamed = 0
-    try:
-        async for page_result in stream.page_results:
-            pages_streamed += 1
-            print(
-                f"      [page {page_result.page_number:>3}] "
-                f"engine={page_result.engine_used.value} "
-                f"figures={len(page_result.figures)} "
-                f"tables={len(page_result.tables)} "
-                f"ms={page_result.duration_ms}",
-                flush=True,
-            )
-    finally:
-        counters = await stream.finalize()
-
-    # Flatten the live job into the Stage1Result the rest of the CLI expects.
-    # ``run_stage1`` would re-do the prescan; we already paid that cost via
-    # ``start_conversion``, so we build the same dataclass directly from the
-    # ConversionJob / EngineClassification on the stream.
+    # The CLI surface still uses Stage1Result for display; the orchestrator
+    # exposes the resolved job + classification only through the summary, so
+    # we shape a Stage1Result purely from public summary fields here.  No
+    # re-prescan: ``convert_to_markdown`` already paid that cost.
     stage1_result = Stage1Result(
         document_name=doc_path.name,
         document_path=doc_path,
-        job_id=stream.job.job_id,
-        document_type=stream.job.document_type.value,
+        job_id=summary.job_id,
+        document_type=doc_path.suffix.lstrip(".").lower(),
         file_size_bytes=doc_path.stat().st_size,
-        total_pages=stream.job.total_pages or pages_streamed,
-        output_dir=stream.job.output_dir,
-        engine=stream.classification.engine.value,
-        complexity_score=stream.classification.complexity_score,
-        confidence=stream.classification.confidence,
-        reason=stream.classification.reason,
+        total_pages=summary.total_pages,
+        output_dir=summary.output_markdown_path.parent,
+        engine=summary.engines_used[0].value if summary.engines_used else "",
+        complexity_score=0.0,
+        confidence=0.0,
+        reason="",
         feature_summary="",
         inferred_requirements=[],
-        elapsed_ms=0.0,
+        elapsed_ms=summary.total_duration_seconds * 1000,
     )
-    return stage1_result, counters, pages_streamed
+    return stage1_result, summary
 
 
 # ---------------------------------------------------------------------------
@@ -181,11 +178,13 @@ async def _run_full_pipeline(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
+        prog="doc2md",
         description=(
             "Document → Markdown conversion CLI.  Default: full pipeline "
-            "(Stage 1 prescan + Stage 2 page extraction + Stage 3 figure "
-            "summarization).  Use --stage1-only for the lightweight "
-            "diagnostic mode."
+            "(Stage 1 prescan + routing → Stage 2 windowed page extraction → "
+            "Stage 3 figure summarization → Stage 4 token substitution and "
+            "atomic Markdown publication).  Use --stage1-only for the "
+            "lightweight routing-diagnostic mode."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -259,13 +258,13 @@ def main(argv: list[str] | None = None) -> int:
                 # and we want each document's Stage 3 worker pool fully
                 # drained before starting the next one (avoids GPU-lock
                 # contention between consecutive jobs).
-                result, counters, _ = asyncio.run(
+                result, summary = asyncio.run(
                     _run_full_pipeline(
                         orchestrator, doc_path, document_domain=document_domain
                     )
                 )
                 _print_result(result)
-                _print_stage3_counters(counters)
+                _print_conversion_summary(summary)
                 results.append(result)
         except PipelineError as exc:
             # Broad domain safety net: a bad document, an unsupported forced-engine

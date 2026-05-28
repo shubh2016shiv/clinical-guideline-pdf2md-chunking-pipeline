@@ -81,15 +81,17 @@ preserves it verbatim by construction.
 
 ## 2. What Stage 4 must actually do
 
-Even though the headline is "substitute tokens", a real clinical
-document forces Stage 4 to handle five concerns simultaneously:
+Even though the headline is "substitute tokens", a real production
+document — regardless of domain (research paper, slide deck, technical
+spec, regulatory text, …) — forces Stage 4 to handle five concerns
+simultaneously:
 
 | Concern                                | What goes wrong if Stage 4 ignores it                                            |
 |----------------------------------------|----------------------------------------------------------------------------------|
 | **Stream order**                       | Pages emitted out-of-order (multi-window engines) → final doc has scrambled pages |
 | **Async resolution timing**            | Stage 3 worker hasn't produced a summary yet when a page arrives                  |
 | **Cross-page tables**                  | Header on p.41, body continues on p.42 — substituting fragments breaks the table  |
-| **Drop decoratives**                   | Pasting "the model says this is a stock photo" into a clinical guideline → noise  |
+| **Drop decoratives**                   | Pasting "the model says this is a stock photo" into the output → phantom prose    |
 | **Atomic on-disk output**              | A mid-write crash leaves a half-written `.md` indistinguishable from a good one   |
 
 Stage 4 separates each concern into its **own collaborator** so unit tests
@@ -247,18 +249,24 @@ substitution resolver must merge before substituting.
            # final-page token's position).
 ```
 
-Why anchor the merged result on the **last page's** token, not the first?
-Because reading order makes the merged table appear "where it ends" in the
-PDF — but that is *wrong* for clinical reading. We anchor on the **first
-fragment's token** (`table.start_page`) so the reader meets the header in
-its natural position; intermediate-page tokens are dropped and the
-final-page token is dropped.
+Why anchor the merged result on the **closing-page** token?
+Because earlier pages have already been streamed to disk by the time the
+closing fragment arrives — anchoring on an earlier page would force the
+assembler to buffer every page that contains an open fragment and edit
+already-written bytes, breaking the streaming contract. The closing-page
+anchor lets each page publish as it arrives: intermediate-page fragment
+tokens are erased *on the page they appear* (substituted with the empty
+string), and the merged Markdown lands at the closing token's position
+on the closing page. Reading-order-wise the table appears "where it
+ends" in the source document, which is also where the natural
+"continued on page N" caption typically sits.
 
 > **Failure containment:** a never-closed fragment (Stage 2 bug: header
-> with no terminating fragment) is detected on flush. The buffered
-> Markdown is emitted at the start-page token's position with a
-> log-warning, and `assembly.degraded_mode_placeholder` is inserted at
-> every later orphan token. The document still completes.
+> with no terminating fragment) is detected on stream exhaustion. The
+> buffered Markdown is emitted as a footer block (one entry per
+> start-page) with a log-warning, and `assembly.degraded_mode_placeholder`
+> stands in for any orphan token. The document still completes; the
+> rows are never silently lost.
 
 ### 4.3 The generic token scanner
 
@@ -410,10 +418,11 @@ fault_tolerance:
 ```
 
 Defaults are deliberately conservative: 1 MB flush buffer, 300 s per-token
-budget, a degraded placeholder that is unmistakably non-clinical text
-(`[Figure: processing failed — see original document]`). A clinical
-reviewer will *never* mistake the degraded placeholder for content; that
-is the only requirement on its wording.
+budget, a degraded placeholder whose wording makes it unmistakably an
+out-of-band pipeline notice rather than authored prose
+(`[Figure: processing failed — see original document]`). A human reader,
+in any domain, must *never* mistake the placeholder for content from the
+source document; that is the only requirement on its wording.
 
 ---
 

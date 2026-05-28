@@ -7,8 +7,9 @@ Policy (single source of truth — Stage 3 produces, Stage 4 routes)
 ------------------------------------------------------------------
 * Token resolved AND ``is_informative=True``  →  substitute ``markdown_result``.
 * Token resolved AND ``is_informative=False`` →  drop the token (decoratives
-  carry no clinical content; pasting a placeholder paragraph would create
-  phantom prose).
+  carry no informational content of any kind — logos, stock photos,
+  ornamental rules; pasting a placeholder paragraph would inject phantom
+  prose that the source document does not contain, regardless of domain).
 * Token unresolved within the wall-clock budget →  substitute the
   ``degraded_mode_placeholder`` from ``AssemblyConfig`` so the document
   still completes and the gap is auditable.

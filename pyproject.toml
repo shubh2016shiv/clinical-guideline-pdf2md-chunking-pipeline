@@ -90,7 +90,11 @@ dependencies = [
 ]
 
 [project.scripts]
-stage1-prescan = "doc2md_conversion_engine.src.entrypoints.convert_document_to_markdown_cli:main"
+# Canonical end-to-end command: PDF (or DOCX/PPTX/HTML) → assembled Markdown.
+# Runs the full pipeline (Stage 1 prescan → Stage 2 extraction → Stage 3 figure
+# summarization → Stage 4 atomic assembly) by default; pass --stage1-only for
+# the lightweight routing-diagnostic mode.
+doc2md = "doc2md_conversion_engine.src.entrypoints.convert_document_to_markdown_cli:main"
 
 # ---------------------------------------------------------------------------
 # Optional Dependency Groups
