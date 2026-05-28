@@ -64,6 +64,7 @@ from .figure_summarization_worker_pool import (
 from .figure_summary_store import JsonFigureSummaryStore
 from .local_vision_concurrency_limiter import LocalVisionConcurrencyLimiter
 from .ollama_vision_client import OllamaVisionFigureClient
+from .openai_vision_client import OpenAIVisionFigureClient
 
 logger = logging.getLogger(__name__)
 
@@ -176,11 +177,15 @@ class FigureSummarizationOrchestrator:
             component_name=_STAGE3_COMPONENT_NAME,
         )
 
-        # GPU lock is only meaningful when GPU is enabled.  In CPU mode we
-        # pass ``None`` and the worker pool skips the lock — local Ollama
-        # can also run on CPU and the lock would just refuse to acquire.
+        # GPU lock is only meaningful when (a) GPU is enabled and (b) the
+        # vision client actually uses the local GPU.  The cloud client
+        # talks to a remote API, so the lock would just serialise workers
+        # for no reason — skip it.
         gpu_context_factory = None
-        if gpu_config.enabled and not gpu_config.force_cpu:
+        uses_local_gpu = (
+            figure_summarization_config.provider == FigureVisionProvider.LOCAL_OLLAMA
+        )
+        if uses_local_gpu and gpu_config.enabled and not gpu_config.force_cpu:
             gpu_context_factory = lambda: ExclusiveGPUContextManager(  # noqa: E731
                 gpu_config,
                 timeout_guard,
@@ -219,20 +224,33 @@ class FigureSummarizationOrchestrator:
         prompt_builder: FigureSummarizationPromptBuilder,
         document_domain: DocumentDomain,
     ) -> AbstractVisionFigureClient:
+        """
+        Resolve the configured ``provider`` to a concrete vision client.
+
+        * ``CLOUD`` (default) → :class:`OpenAIVisionFigureClient` —
+          OpenAI-compatible Responses / Chat API (``gpt-5-nano``,
+          ``qvq-max`` on DashScope, etc.).  Reliable, fast, no local GPU
+          required.
+        * ``LOCAL_OLLAMA`` → :class:`OllamaVisionFigureClient` — local
+          Qwen-VL via Ollama.  Opt-in for capable on-box GPUs / PHI
+          isolation requirements.
+        """
+        if config.provider == FigureVisionProvider.CLOUD:
+            return OpenAIVisionFigureClient(
+                config=config.vision_llm,
+                prompt_builder=prompt_builder,
+                document_domain=document_domain,
+            )
         if config.provider == FigureVisionProvider.LOCAL_OLLAMA:
             return OllamaVisionFigureClient(
                 config=config.ollama_vision_client,
                 prompt_builder=prompt_builder,
                 document_domain=document_domain,
             )
-        # ``cloud`` is reserved for a future DashScope/OpenAI adapter; we
-        # fail loudly rather than silently falling back, because clinical
-        # workloads should never be re-routed without explicit consent.
         raise NotImplementedError(
-            f"Vision provider {config.provider!r} is configured but only "
-            f"{FigureVisionProvider.LOCAL_OLLAMA.value!r} is implemented in "
-            "this build.  Either install a cloud adapter or set provider "
-            "to local_ollama in settings.yaml."
+            f"Unknown vision provider {config.provider!r}.  Valid values: "
+            f"{FigureVisionProvider.CLOUD.value!r} (default), "
+            f"{FigureVisionProvider.LOCAL_OLLAMA.value!r}."
         )
 
     # ------------------------------------------------------------------

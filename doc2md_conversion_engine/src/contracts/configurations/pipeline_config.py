@@ -59,6 +59,7 @@ from pydantic_settings import (
 
 from .docling_engine_config import DoclingEngineConfig
 from .mineru_engine_config import MinerUEngineConfig
+from .ollama_vision_client_config import OllamaVisionClientConfig
 from .vision_llm_client_config import VisionLLMClientConfig
 
 # Absolute path to the settings file co-located with this src/ tree.
@@ -509,19 +510,46 @@ class GPUConfig(BaseModel):
     )
 
 
+class FigureVisionProvider(StrEnum):
+    """
+    Which vision-LLM client implementation Stage 3 uses.
+
+    ``CLOUD``
+        OpenAI-compatible cloud provider configured via ``vision_llm``
+        (OpenAI / DashScope / Anthropic).  **Default** — reliable, fast
+        (~5-30 s per figure), no local GPU required.  ``gpt-5-nano`` via
+        the Responses API is the proven configuration.
+
+    ``LOCAL_OLLAMA``
+        Local Qwen-VL (or other vision-capable model) served by Ollama on
+        the host.  Opt-in for users with a capable GPU who want to keep
+        PHI on-box; latency is much higher (~8 min per figure on a 4B
+        VLM) so this is not the default.
+    """
+
+    CLOUD = "cloud"
+    LOCAL_OLLAMA = "local_ollama"
+
+
 class FigureSummarizationConfig(BaseModel):
     """
-    Settings for Stage 3 — async batch vision LLM processing of figures.
+    Settings for Stage 3 — figure summarization.
 
-    Jargon — worker pool: instead of spawning one thread per figure
-    (which would create hundreds of threads), a fixed-size pool of workers
-    (``worker_pool_size``) dequeues figures from a bounded queue and sends
-    them to the LLM in batches.  This provides controlled concurrency with
-    automatic backpressure.
+    The Stage 3 plan (see ``STAGE_3_PLAN.md``) calls for a *local* Ollama VLM
+    that processes **one image per request** with reasoning, with a small
+    worker pool capped by an in-flight concurrency limit (no RPM, because
+    there is no cloud API).  These knobs reflect that reality; the legacy
+    cloud knobs (``batch_size``, ``rate_limit_rpm``, ``vision_llm``) are kept
+    so the provider can be switched without code changes.
 
-    Jargon — backpressure: when the queue reaches ``max_queue_size``, the
-    extraction stage blocks instead of adding more items.  This prevents
-    unbounded memory growth if the LLM is slower than extraction.
+    Jargon — worker pool: a fixed-size set of async workers that dequeue
+    figures from a bounded queue and feed them to the vision client one at a
+    time.  Bounded concurrency + bounded queue together give predictable
+    memory + VRAM behaviour.
+
+    Jargon — backpressure: when the queue reaches ``max_queue_size`` the
+    extraction stage *waits* before adding more items, so memory stays flat
+    instead of growing while summarization catches up.
     """
 
     enabled: bool = Field(
@@ -606,7 +634,50 @@ class FigureSummarizationConfig(BaseModel):
         ),
     )
 
+    provider: FigureVisionProvider = Field(
+        default=FigureVisionProvider.CLOUD,
+        description=(
+            "Vision client implementation Stage 3 uses.  Default is ``cloud`` "
+            "because cloud vision endpoints (OpenAI gpt-5-nano via Responses "
+            "API) are reliable, fast (~5-30 s per figure), and do not require "
+            "a powerful local GPU.  Switch to ``local_ollama`` if you have a "
+            "capable on-box GPU and want to keep PHI on the machine.  "
+            "Code paths switch off this field — no other change needed."
+        ),
+    )
+
+    local_vision_in_flight_limit: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Cap on concurrent in-flight requests to the *local* Ollama VLM.  "
+            "Ollama serializes vision+thinking internally on a single GPU, so "
+            "oversubscribing only thrashes VRAM.  Typical values: 1 (safe), 2 "
+            "(small models / large GPU).  Replaces ``rate_limit_rpm`` for the "
+            "local provider, which has no RPM concept."
+        ),
+    )
+
+    summary_store_dir: str = Field(
+        default=".figure_summaries",
+        description=(
+            "Directory (under the job output dir) where the token→FigureSummary "
+            "association map is persisted.  Survives crashes so re-runs resume "
+            "deterministically — Stage 4 reads this on assembly."
+        ),
+    )
+
+    # --- legacy cloud knobs (kept for provider=cloud path) ----------------
     vision_llm: VisionLLMClientConfig = Field(default_factory=VisionLLMClientConfig)
+
+    # --- local Ollama knobs (used when provider=local_ollama) -------------
+    ollama_vision_client: OllamaVisionClientConfig = Field(
+        default_factory=OllamaVisionClientConfig,
+        description=(
+            "Local Ollama vision client settings.  Active when "
+            "``provider=local_ollama`` (the default)."
+        ),
+    )
 
 
 class CircuitBreakerConfig(BaseModel):

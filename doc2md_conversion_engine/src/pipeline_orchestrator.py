@@ -39,6 +39,7 @@ from pathlib import Path
 
 from .contracts.configurations.pipeline_config import PipelineConfig
 from .contracts.exceptions import DocumentError
+from .contracts.figure_summarization_types import DocumentDomain
 from .contracts.pipeline_domain_types import (
     ConversionJob,
     EngineClassification,
@@ -53,6 +54,10 @@ from .stage1_document_prescanning import (
     EngineRoutingPolicy,
 )
 from .stage2_page_extraction import WindowedPageExtractionOrchestrator
+from .stage3_figure_summarization import (
+    FigureSummarizationCounters,
+    FigureSummarizationOrchestrator,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +81,56 @@ class Stage1Result:
     inferred_requirements: list[str]
     elapsed_ms: float
     errors: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DocumentConversionStream:
+    """
+    Live handle to one in-flight document conversion.
+
+    Returned by :meth:`PipelineOrchestrator.start_conversion`.  Bundles the
+    three things a caller (CLI / API / Stage 4 assembler) needs in lock-step:
+
+    * the live :class:`ConversionJob` and :class:`EngineClassification`,
+    * the **async generator of pages** — iterating this drives Stage 2
+      extraction AND, transparently, feeds every figure into Stage 3 so the
+      worker pool is summarising while the caller is still consuming pages,
+    * the **Stage 3 orchestrator handle** — exposed so Stage 4's token
+      resolver can call :meth:`FigureSummarizationOrchestrator.get_summary`
+      against the same instance that is being fed from Stage 2.
+
+    Lifecycle::
+
+        stream = orchestrator.start_conversion(path)
+        async for page_result in stream.page_results:
+            # Stage 4 can resolve tokens here using stream.figure_summarization
+            ...
+        counters = await stream.finalize()
+
+    Why a session object (not just a generator)?
+    ---------------------------------------------
+    Stage 3's correctness depends on three lifecycle events happening in
+    order: ``start`` (before any figure is enqueued), ``enqueue_figure`` per
+    page, and ``drain_and_close`` (exactly once after the last page).  A
+    bare generator would either hide ``drain_and_close`` from the caller or
+    expose it through error-prone side channels.  A session makes the
+    contract explicit: the caller calls :meth:`finalize` exactly once.
+    """
+
+    job: ConversionJob
+    classification: EngineClassification
+    figure_summarization: FigureSummarizationOrchestrator
+    page_results: AsyncGenerator[PageResult, None]
+
+    async def finalize(self) -> FigureSummarizationCounters:
+        """
+        Close the figure queue and wait for Stage 3 workers to finish.
+
+        Must be called exactly once, after :attr:`page_results` is fully
+        exhausted (or the iteration is abandoned).  Returns the counters
+        that flow straight into :class:`ConversionSummary`.
+        """
+        return await self.figure_summarization.drain_and_close()
 
 
 @dataclass
@@ -106,6 +161,7 @@ class PipelineOrchestrator:
     """
 
     def __init__(self, config: PipelineConfig) -> None:
+        self._config = config
         self._intake = DocumentUploadIntake(config.document_constraints)
         self._hasher = DocumentSHA256Hasher(config.document_constraints)
         self._store = UploadedDocumentStagingStore(config.storage)
@@ -158,10 +214,81 @@ class PipelineOrchestrator:
         results into Stage 3 (figures) and Stage 4 (assembly) while later pages are
         still being converted. Resumes automatically from a prior checkpoint when one
         exists for this document.
+
+        Note: this method does **not** wire Stage 3.  Callers that need figure
+        summarization should use :meth:`start_conversion` instead, which returns a
+        :class:`DocumentConversionStream` that drives Stage 2 + Stage 3 together
+        and exposes the :class:`FigureSummarizationOrchestrator` to Stage 4.  This
+        method is retained for the Stage 1/2-only diagnostic path used by the CLI's
+        ``--no-figures`` mode and by tests.
         """
         outcome = self._prescan(document_path)
         async for page_result in self.run_stage2(outcome.job, outcome.classification):
             yield page_result
+
+    def start_conversion(
+        self,
+        document_path: Path,
+        *,
+        document_domain: DocumentDomain = DocumentDomain.AUTO,
+    ) -> DocumentConversionStream:
+        """
+        Begin a full Stage 1 → Stage 2 → Stage 3 conversion session.
+
+        Returns a :class:`DocumentConversionStream` immediately; the actual
+        extraction work runs when the caller starts iterating
+        :attr:`DocumentConversionStream.page_results`.
+
+        Wiring (the contract this method is responsible for):
+
+        * Stage 1 prescan runs here, synchronously, so any
+          :class:`DocumentError` / :class:`DocumentTooLargeError` /
+          :class:`ConfigurationError` surfaces before any GPU work begins.
+        * The Stage 3 orchestrator is constructed (per job, with the job's
+          ``output_dir`` rooting the dedup cache and summary store) and
+          started before the first page is yielded.  This guarantees a
+          worker is ready when the first ``enqueue_figure`` arrives.
+        * The page generator wraps :meth:`run_stage2` and enqueues every
+          ``figure`` on every ``PageResult`` into Stage 3 *before* yielding
+          the page to the caller.  Backpressure from Stage 3 therefore
+          slows Stage 2 naturally — exactly the architectural intent.
+        * The caller is responsible for calling
+          :meth:`DocumentConversionStream.finalize` once iteration is done
+          to drain Stage 3 and collect the counters.
+
+        Parameters
+        ----------
+        document_path:
+            The source document to convert.
+        document_domain:
+            Optional domain hint passed into the Stage 3 prompt.  Defaults
+            to ``AUTO``, letting the VLM infer the domain from visual
+            context — appropriate for mixed corpora.  Pass
+            ``DocumentDomain.CLINICAL`` (or another concrete value) when the
+            caller knows the corpus a priori.
+        """
+        outcome = self._prescan(document_path)
+        stage3 = self._build_stage3_orchestrator(
+            job=outcome.job,
+            document_domain=document_domain,
+        )
+        # Stage 3 is *not* eagerly started here — its worker tasks require a
+        # running event loop.  ``enqueue_figure`` lazy-starts on first use,
+        # which is guaranteed to happen inside the caller's event loop when
+        # the page generator runs.
+
+        page_generator = self._page_stream_feeding_stage3(
+            job=outcome.job,
+            classification=outcome.classification,
+            stage3=stage3,
+        )
+
+        return DocumentConversionStream(
+            job=outcome.job,
+            classification=outcome.classification,
+            figure_summarization=stage3,
+            page_results=page_generator,
+        )
 
     async def run_stage2(
         self,
@@ -190,6 +317,70 @@ class PipelineOrchestrator:
         )
 
         async for page_result in self._stage2.extract(job, classification):
+            yield page_result
+
+    # ------------------------------------------------------------------
+    # Stage 3 wiring (build + producer-side feed)
+    # ------------------------------------------------------------------
+
+    def _build_stage3_orchestrator(
+        self,
+        *,
+        job: ConversionJob,
+        document_domain: DocumentDomain,
+    ) -> FigureSummarizationOrchestrator:
+        """
+        Build a job-scoped :class:`FigureSummarizationOrchestrator`.
+
+        Stage 3 state (dedup cache, summary store) is rooted under the
+        job's ``output_dir`` so two concurrent conversions cannot stomp on
+        each other's caches, and so a resume always finds the state where
+        it left it.  All resilience and GPU collaborators are derived from
+        the same :class:`PipelineConfig` instance Stage 2 uses, so Stage 3's
+        timeouts / retry policy / breaker stay consistent with the rest of
+        the pipeline.
+        """
+        return FigureSummarizationOrchestrator.build(
+            figure_summarization_config=self._config.figure_summarization,
+            fault_tolerance_config=self._config.fault_tolerance,
+            gpu_config=self._config.gpu,
+            assembly_config=self._config.assembly,
+            job_output_dir=job.output_dir,
+            document_domain=document_domain,
+        )
+
+    async def _page_stream_feeding_stage3(
+        self,
+        *,
+        job: ConversionJob,
+        classification: EngineClassification,
+        stage3: FigureSummarizationOrchestrator,
+    ) -> AsyncGenerator[PageResult, None]:
+        """
+        Stream pages from Stage 2 and feed each page's figures into Stage 3.
+
+        Per page, the order is intentional:
+
+        1. Enqueue every figure on the page **first**.  Stage 3 starts
+           working on these as soon as a worker is free, in parallel with
+           the caller's consumption of the page.
+        2. Yield the page to the caller.  Stage 4 may begin assembling
+           immediately and call ``stage3.get_summary(token)`` for each
+           ``${FIG:...}`` placeholder.
+
+        ``enqueue_figure`` is bounded by the Stage 3 queue, so if Stage 3
+        falls behind, Stage 2 naturally throttles here without any extra
+        coordination code.  Backpressure flows the right way: from the
+        slow component to the fast one.
+
+        Note on lifecycle: this generator does *not* call
+        ``stage3.drain_and_close``.  The :class:`DocumentConversionStream`
+        ``finalize`` method owns that, so the contract stays explicit:
+        finishing the page stream is *not* the same as committing Stage 3.
+        """
+        async for page_result in self.run_stage2(job, classification):
+            for figure in page_result.figures:
+                await stage3.enqueue_figure(figure)
             yield page_result
 
     # ------------------------------------------------------------------

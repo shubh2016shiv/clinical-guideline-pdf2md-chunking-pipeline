@@ -210,24 +210,74 @@ gpu:
 # -----------------------------------------------------------------------------
 figure_summarization:
   enabled: true
-  worker_pool_size: 3               # fixed number of concurrent vision LLM workers
-  batch_size: 5                     # images per API call (QVQ-Max: keep lower due to reasoning depth)
+  provider: cloud                   # cloud (OpenAI gpt-5-nano — DEFAULT, fast & reliable)
+                                    #   | local_ollama (on-box Qwen-VL — opt-in for capable GPU)
+  worker_pool_size: 4               # async workers consuming the figure queue
+                                    #   cloud is I/O-bound; 4-8 is a good starting point
+                                    #   drop to 1-2 if switching to local_ollama
+  batch_size: 1                     # one image per call — preserved per-figure attribution
   max_queue_size: 100               # bounded figure queue (backpressure on extraction)
-  rate_limit_rpm: 60                # requests per minute ceiling (DashScope default)
-  batch_timeout_seconds: 60         # QVQ chain-of-thought is slower — raise from 30s
+  rate_limit_rpm: 60                # ignored for provider=local_ollama
+  local_vision_in_flight_limit: 4   # max simultaneous calls to vision endpoint
+                                    #   cloud: match worker_pool_size (API can fan out)
+                                    #   local_ollama: 1 (VRAM-bound; serialises on GPU anyway)
+  batch_timeout_seconds: 60         # ignored — both clients own their own request_timeout
   token_resolution_timeout_seconds: 300   # max wait per ${FIG:...} token in assembly
-  figure_retries: 3                 # retries before poison-pill skip
+  figure_retries: 2                 # total attempts before poison-pill skip (initial + 1)
+                                    #   cloud failures are usually transient (rate limits,
+                                    #   socket flakes) so 2 attempts is a sensible default;
+                                    #   for local_ollama, retries rarely help because the
+                                    #   same image deterministically empties content.
   deduplication_enabled: true       # SHA256 cache — skip reused diagrams
   deduplication_cache_dir: ".figure_cache"
+  summary_store_dir: ".figure_summaries"   # token → FigureSummary association (Stage 4 reads)
 
+  # Local Ollama vision client (active when provider=local_ollama)
+  ollama_vision_client:
+    base_url: null                  # null = ollama python client default (http://localhost:11434)
+    model: "qwen3-vl:4b"            # vision-capable Ollama tag (must be pulled locally)
+    request_timeout_seconds: 600.0  # hard ceiling per call (4B VL @ ~8 tok/s × num_predict 4096 ≈ 8 min)
+    temperature: 0.0                # deterministic — clinical numbers must not jitter
+    top_p: 0.1
+    seed: 42
+    num_ctx: 8192                   # Ollama context window
+    num_predict: 4096               # required: Qwen3-VL emits unsuppressable <think> tokens; needs room for them + answer
+    enable_thinking: false          # think:true often empties JSON output on small VLMs
+    fallback_to_no_thinking_on_failure: true
+    image_max_side_pixels: 768      # downscale ceiling (preserves small clinical text)
+    image_cache_directory: ".figure_analyzer_cache"
+
+  # Cloud client (active when provider=cloud — the default)
+  # Defaults mirror deepseek_image_explanation_check_enhanced.py — the
+  # empirically-validated configuration: GPT-5-nano via Responses API with
+  # reasoning_effort=low, verbosity=high, max_output_tokens=5000, careful
+  # image budget, image_detail=high.
   vision_llm:
-    provider: dashscope             # dashscope | openai | anthropic (determines base_url)
-    model: "qvq-max"                # qvq-max | qwen3-vl-flash-2026-01-22
-    # DashScope OpenAI-compatible endpoint (international)
-    api_base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-    api_key_env_var: DASHSCOPE_API_KEY   # env var name — never put the key here
-    # qvq-max uses streaming-only output; set to true
-    streaming: true
+    provider: openai                # openai | dashscope | anthropic (determines base_url)
+    model: "gpt-5-mini"             # openai: gpt-5-nano (fast, cheap, reasoning-capable)
+                                    #   dashscope: qvq-max | qwen3-vl-flash-2026-01-22
+    api_type: responses             # responses (GPT-5 reasoning/verbosity) | chat (DashScope)
+    api_base_url: null              # null = use provider's default base URL
+    api_key_env_var: OPENAI_API_KEY # env var name — never put the key here
+                                    #   switch to DASHSCOPE_API_KEY if provider=dashscope
+    streaming: false                # ignored on responses API; required for qvq-max chat
+    # GPT-5 reasoning controls (active on api_type=responses)
+    reasoning_effort: medium           # minimal | low | medium | high
+                                    #   'low' is the proven default — strong output without
+                                    #   blowing the max_output_tokens budget on hidden thinking
+    verbosity: high                 # low | medium | high — 'high' = detailed Markdown
+    max_output_tokens: 10000         # caps TOTAL generated tokens (incl. hidden reasoning)
+                                    #   raise to 8000 if reasoning_effort=medium/high
+    # Image preprocessing
+    image_detail: high              # auto | low | high — 'high' needed for tiny clinical labels
+    image_budget: careful           # aggressive | balanced | careful
+                                    #   'careful' = ≤2400 px longest edge, JPEG q=90
+                                    #   preserves forest-plot CIs and axis tick labels
+    image_cache_directory: ".figure_analyzer_cache"
+    # Reliability
+    request_timeout_seconds: 120.0  # hard ceiling per API call (gpt-5-nano usually 5-30 s)
+    retry_empty_response: true      # on empty text, retry once with reasoning_effort=minimal
+                                    #   and 2× output budget (mirrors the reference script)
 
 
 # -----------------------------------------------------------------------------

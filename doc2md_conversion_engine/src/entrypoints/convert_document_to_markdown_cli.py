@@ -3,20 +3,32 @@ convert_document_to_markdown_cli.py
 ====================================
 Thin CLI entry point.  All orchestration lives in ``pipeline_orchestrator.py``.
 
+Default behaviour is the **full pipeline** for each document: Stage 1
+(prescan + routing) → Stage 2 (windowed page extraction) → Stage 3
+(figure summarization through the local Ollama VLM).  Stage 4 (assembly)
+is not yet wired into this CLI; the per-document outputs (page Markdown,
+extracted figure images, ``${FIG:...}`` → ``FigureSummary`` map) are
+written to the job's output directory and a future revision will splice
+them into a single assembled Markdown file.
+
+For the legacy diagnostic mode (Stage 1 only — what this CLI did
+historically), pass ``--stage1-only``.
+
 Requires the package to be installed (editable mode)::
 
     uv sync                      # one-time: install the package
     uv run doc2md_conversion_engine/src/entrypoints/convert_document_to_markdown_cli.py \\
-        --doc_folder /home/user/Downloads/research_papers
+        --doc-folder /home/user/Downloads/research_papers
 
 Or via the registered entry point::
 
-    uv run stage1-prescan --doc_folder /home/user/Downloads/research_papers
+    uv run stage1-prescan --doc-folder /home/user/Downloads/research_papers
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 import time
 from pathlib import Path
@@ -25,9 +37,15 @@ from doc2md_conversion_engine.src.contracts.configurations.pipeline_config impor
     PipelineConfig,
 )
 from doc2md_conversion_engine.src.contracts.exceptions import PipelineError
+from doc2md_conversion_engine.src.contracts.figure_summarization_types import (
+    DocumentDomain,
+)
 from doc2md_conversion_engine.src.pipeline_orchestrator import (
     PipelineOrchestrator,
     Stage1Result,
+)
+from doc2md_conversion_engine.src.stage3_figure_summarization import (
+    FigureSummarizationCounters,
 )
 
 # ---------------------------------------------------------------------------
@@ -67,6 +85,15 @@ def _print_result(result: Stage1Result) -> None:
     print(f"      {'Output:':<18s} {result.output_dir}")
 
 
+def _print_stage3_counters(counters: FigureSummarizationCounters) -> None:
+    print(
+        f"      {'Figures:':<18s} "
+        f"summarized={counters.figures_summarized}  "
+        f"deduped={counters.figures_deduplicated}  "
+        f"failed={counters.figures_failed}"
+    )
+
+
 def _print_summary(results: list[Stage1Result], total_elapsed: float) -> None:
     n = len(results)
     by_engine: dict[str, int] = {}
@@ -89,20 +116,84 @@ def _print_summary(results: list[Stage1Result], total_elapsed: float) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Per-document conversion (full pipeline)
+# ---------------------------------------------------------------------------
+
+
+async def _run_full_pipeline(
+    orchestrator: PipelineOrchestrator,
+    doc_path: Path,
+    *,
+    document_domain: DocumentDomain,
+) -> tuple[Stage1Result, FigureSummarizationCounters, int]:
+    """
+    Run Stage 1 → 2 → 3 for one document and return the flattened result,
+    Stage 3 counters, and number of pages streamed.
+
+    Uses ``PipelineOrchestrator.start_conversion`` — the Stage-3-wired
+    entry point — and is careful to call ``finalize()`` even when the page
+    loop raises, so Stage 3's worker tasks never leak past this call.
+    """
+    stream = orchestrator.start_conversion(doc_path, document_domain=document_domain)
+
+    pages_streamed = 0
+    try:
+        async for page_result in stream.page_results:
+            pages_streamed += 1
+            print(
+                f"      [page {page_result.page_number:>3}] "
+                f"engine={page_result.engine_used.value} "
+                f"figures={len(page_result.figures)} "
+                f"tables={len(page_result.tables)} "
+                f"ms={page_result.duration_ms}",
+                flush=True,
+            )
+    finally:
+        counters = await stream.finalize()
+
+    # Flatten the live job into the Stage1Result the rest of the CLI expects.
+    # ``run_stage1`` would re-do the prescan; we already paid that cost via
+    # ``start_conversion``, so we build the same dataclass directly from the
+    # ConversionJob / EngineClassification on the stream.
+    stage1_result = Stage1Result(
+        document_name=doc_path.name,
+        document_path=doc_path,
+        job_id=stream.job.job_id,
+        document_type=stream.job.document_type.value,
+        file_size_bytes=doc_path.stat().st_size,
+        total_pages=stream.job.total_pages or pages_streamed,
+        output_dir=stream.job.output_dir,
+        engine=stream.classification.engine.value,
+        complexity_score=stream.classification.complexity_score,
+        confidence=stream.classification.confidence,
+        reason=stream.classification.reason,
+        feature_summary="",
+        inferred_requirements=[],
+        elapsed_ms=0.0,
+    )
+    return stage1_result, counters, pages_streamed
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Preflight + Stage 1 prescan for doc2md pipeline.",
+        description=(
+            "Document → Markdown conversion CLI.  Default: full pipeline "
+            "(Stage 1 prescan + Stage 2 page extraction + Stage 3 figure "
+            "summarization).  Use --stage1-only for the lightweight "
+            "diagnostic mode."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--doc-folder",
         type=Path,
         required=True,
-        help="Directory containing documents to prescan.",
+        help="Directory containing documents to convert.",
     )
     parser.add_argument(
         "--recursive",
@@ -110,8 +201,29 @@ def main(argv: list[str] | None = None) -> int:
         default=False,
         help="Recurse into subdirectories.",
     )
+    parser.add_argument(
+        "--stage1-only",
+        action="store_true",
+        default=False,
+        help=(
+            "Run Stage 1 (prescan + routing) only.  No GPU extraction, no "
+            "figure summarization.  Useful for routing diagnostics across a "
+            "large corpus."
+        ),
+    )
+    parser.add_argument(
+        "--domain",
+        type=str,
+        default=DocumentDomain.AUTO.value,
+        choices=[d.value for d in DocumentDomain],
+        help=(
+            "Document-domain hint for the Stage 3 prompt.  'auto' lets the "
+            "VLM infer the domain from visual context."
+        ),
+    )
     args = parser.parse_args(argv)
     root = args.doc_folder.expanduser().resolve()
+    document_domain = DocumentDomain(args.domain)
 
     orchestrator = PipelineOrchestrator(PipelineConfig())
 
@@ -127,7 +239,8 @@ def main(argv: list[str] | None = None) -> int:
         print("      .pdf, .docx, .pptx, .html, .htm", file=sys.stderr)
         return 1
 
-    _status("📋", f"Found {len(paths)} document(s)")
+    mode = "stage 1 only" if args.stage1_only else f"full pipeline (domain={document_domain.value})"
+    _status("📋", f"Found {len(paths)} document(s) — mode: {mode}")
 
     results: list[Stage1Result] = []
     errors: list[tuple[str, str]] = []
@@ -136,7 +249,24 @@ def main(argv: list[str] | None = None) -> int:
     for i, doc_path in enumerate(paths, 1):
         _bar(f"[{i}/{len(paths)}]  {doc_path.name}")
         try:
-            result = orchestrator.run_stage1(doc_path)
+            if args.stage1_only:
+                result = orchestrator.run_stage1(doc_path)
+                _print_result(result)
+                results.append(result)
+            else:
+                # Full pipeline: ``asyncio.run`` per document is the right
+                # shape here because the CLI processes documents serially
+                # and we want each document's Stage 3 worker pool fully
+                # drained before starting the next one (avoids GPU-lock
+                # contention between consecutive jobs).
+                result, counters, _ = asyncio.run(
+                    _run_full_pipeline(
+                        orchestrator, doc_path, document_domain=document_domain
+                    )
+                )
+                _print_result(result)
+                _print_stage3_counters(counters)
+                results.append(result)
         except PipelineError as exc:
             # Broad domain safety net: a bad document, an unsupported forced-engine
             # /format combination (ConfigurationError), or any other pipeline failure
@@ -144,8 +274,6 @@ def main(argv: list[str] | None = None) -> int:
             _status("⛔", str(exc))
             errors.append((doc_path.name, str(exc)))
             continue
-        results.append(result)
-        _print_result(result)
 
     total_elapsed = time.perf_counter() - t_start
 
