@@ -42,6 +42,113 @@ The contract is fixed by:
 
 No Stage 3 internal type leaks outside of `contracts/`.
 
+### 1.1  How a figure's position is preserved end-to-end
+
+> **One sentence:** the `${FIG:...}` token is *both* the correlation ID
+> (which summary belongs to which figure) *and* the position marker
+> (where in the document the summary goes) — there is no separate
+> position field, because the token's literal offset inside
+> `markdown_with_tokens` already encodes its location.
+
+Reading order is set by Stage 2 (Docling / MinerU walks the PDF page
+top-to-bottom). When the engine reaches a figure, instead of dropping
+nothing or a `<image>` reference, it splices the deterministic token
+`${FIG:<doc_sha>:<page_3digit>:<index>}` into the page Markdown at that
+exact spot. The token then **travels with the surrounding prose** —
+caption, paragraph breaks, body text — through the rest of the
+pipeline. Stage 4 only has to `str.replace(token, summary.markdown_result)`
+on each page Markdown to put the figure explanation back exactly where
+the figure was.
+
+That is the whole mechanism. There is no x/y coordinate, no
+"insert-after-paragraph-N" pointer, no separate ordering pass. The
+correctness of the final document hinges on a single property:
+**Stage 2 emits the token at the figure's reading-order position, and
+nothing downstream reorders the Markdown around it.**
+
+```
+   PDF page (reading order)                       page_NNNN.json (Stage 2 output)
+   ─────────────────────────                      ───────────────────────────────
+   ┌──────────────────────────┐                   markdown_with_tokens:
+   │  …paragraph above…       │   ──Stage 2─▶       "...paragraph above...
+   │                          │                       ${FIG:74a76…:002:0}
+   │  ┌────────────────────┐  │                       Figure 1: caption text
+   │  │   Figure (image)   │  │                       ...paragraph below..."
+   │  └────────────────────┘  │
+   │  Figure 1: caption text  │                   figures: [{
+   │                          │                     token:      "${FIG:74a76…:002:0}",
+   │  …paragraph below…       │                     image_path: ".../figure_p002_0.png",
+   └──────────────────────────┘                     sha256:     "0c2b25...",
+                                                    page_number: 2,
+                                                    index_on_page: 0
+                                                  }]
+            │                                                  │
+            │                                                  │
+            ▼ Stage 3 reads the Figure entry, never the page Markdown
+   ┌──────────────────────────────────────────────────────────────────────┐
+   │  vision client(image_path) → Markdown                                │
+   │  summary_store.put(FigureSummary{                                    │
+   │       token: "${FIG:74a76…:002:0}",         ◄── same token verbatim  │
+   │       markdown_result: "### Figure: …(extracted+explained)…"         │
+   │  })                                                                  │
+   └──────────────────────────────────────────────────────────────────────┘
+            │
+            │ persisted file is named after the (filename-escaped) token:
+            │   .figure_summaries/FIG__74a76…__002__0.json
+            ▼
+   ┌──────────────────────────────────────────────────────────────────────┐
+   │  STAGE 4 — token resolver + substitutor (one pass per page)          │
+   │                                                                      │
+   │  for each ${FIG:…} match in markdown_with_tokens:                    │
+   │      summary  = await orchestrator.get_summary(token)   ◄── by token │
+   │      markdown = markdown.replace(token, summary.markdown_result)     │
+   │                                                                      │
+   │  (None → degraded placeholder; is_informative=False → drop the line) │
+   └──────────────────────────────────────────────────────────────────────┘
+            │
+            ▼
+   Final assembled Markdown — figure explanation lands at the same position
+   the figure occupied on the PDF page, with its original caption still
+   immediately after it.
+```
+
+**Why this works (the load-bearing invariants):**
+
+* The token is **inserted by Stage 2 inline at the figure's reading-order
+  position**. If Stage 2 ever emitted figures out-of-order or omitted the
+  token, position would be lost — Stage 3 cannot recover it.
+* The token is **string-equal across all three stages**. Stage 2 writes
+  it into both `markdown_with_tokens` and the `figures[].token` field;
+  Stage 3 echoes it into `FigureSummary.token`; Stage 4 looks it up by
+  the same string. Any sanitisation happens only at the *filename* layer
+  (`_token_to_filename` in `figure_summary_store.py`), never on the
+  token value itself.
+* `str.replace` is **position-preserving** by construction — surrounding
+  text is untouched and not reordered. No Markdown re-rendering, no
+  AST round-trip.
+
+**Two concerns, one artefact:**
+
+| Concern    | Mechanism                                              | Where it lives                                                                    |
+|------------|--------------------------------------------------------|-----------------------------------------------------------------------------------|
+| Correlation| Token string equality                                  | `FigureSummary.token == "${FIG:…}"` matches the inline placeholder                |
+| Position   | Token's byte offset inside `markdown_with_tokens`      | Set by Stage 2; preserved by Stage 4's `str.replace`                              |
+
+Both are solved by the *same* token. That is why no separate position
+field exists on `Figure` or `FigureSummary` — adding one would be
+redundant and would create a second source of truth that could drift.
+
+**What this means for a new developer:**
+
+* You never need to compute or store "where the figure goes." Trust
+  the token.
+* If you are debugging a misplaced figure in the final Markdown, the
+  bug is almost certainly in **Stage 2's emit step** (wrong order, wrong
+  token, or missing token), *not* in Stage 3 or Stage 4.
+* If you are extending Stage 3 (e.g. adding a new vision provider), the
+  only contract you must preserve is *"the `token` field on the returned
+  `FigureSummary` equals the `token` field on the input `Figure`."*
+
 ---
 
 ## 2. What clinical figures actually look like
