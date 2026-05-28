@@ -13,7 +13,7 @@ The local Ollama path needs a capable on-box GPU and an 8-minute budget
 per figure on a quantised 4B VLM, so cloud is the right default for the
 vast majority of operators.
 
-Behavioural parity with ``deepseek_image_explanation_check_enhanced.py``
+Behavioural parity with ``openai_image_explanation_check.py``
 ------------------------------------------------------------------------
 The reference script is the empirically-validated configuration.  This
 client mirrors it 1:1:

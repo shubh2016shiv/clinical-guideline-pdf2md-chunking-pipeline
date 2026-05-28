@@ -248,7 +248,7 @@ figure_summarization:
     image_cache_directory: ".figure_analyzer_cache"
 
   # Cloud client (active when provider=cloud — the default)
-  # Defaults mirror deepseek_image_explanation_check_enhanced.py — the
+  # Defaults mirror openai_image_explanation_check.py — the
   # empirically-validated configuration: GPT-5-nano via Responses API with
   # reasoning_effort=low, verbosity=high, max_output_tokens=5000, careful
   # image budget, image_detail=high.
